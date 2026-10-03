@@ -19,9 +19,13 @@
 #     The feed valve stays open, so the tank refills while you draw water.
 #     Dispensed = (level drop) + (expected refill during the draw), where the
 #     expected refill comes from the learned rate-vs-fullness profile.
-#     A session starts when the tank drains faster than it refills and ends
-#     after 10 s with no draw. The profile keeps learning (EMA) whenever the
-#     tank is idle, so it follows changes in line pressure / water temperature.
+#     A draw only counts if the level is actually falling. A session starts when
+#     the tank drains faster than it refills and ends after 10 s with no draw.
+#     The UI leaves "dispensing" GRACE_MS after the last real draw.
+#     The profile keeps learning (EMA) whenever the tank is idle, so it follows
+#     changes in line pressure / water temperature.
+#     If the tank sits near-full and perfectly still for ANCHOR_MS, that raw
+#     value becomes the new 100% point (full8); empty and capacity stay fixed.
 #   Everything is stored in tank.json on the board (calibration + refill profile).
 
 import gc
@@ -37,10 +41,10 @@ except ImportError:
     import uasyncio as asyncio
 
 # ------------------------------ CONFIG ------------------------------
-SSID = "YOUR_WIFI_NAME"
-PASSWORD = "YOUR_WIFI_PASSWORD"
+SSID = "ssid"
+PASSWORD = "pass"
 HOSTNAME = "rotank"
-TX_POWER = 8.5            # dBm, helps flaky Super Mini antennas. None = default
+TX_POWER = 12            # dBm, helps flaky Super Mini antennas. None = default
 AP_SSID = "ROTank"        # fallback hotspot if WiFi fails at boot (IP 192.168.4.1)
 AP_PASSWORD = "rotank1234"
 
@@ -51,6 +55,8 @@ TICK_MS = 500             # engine update period (averages ~5 HX711 samples)
 HIST_N = 130              # history length (130 x 0.5 s = 65 s)
 DW = 2                    # seconds, window used to detect a draw
 DRAW_ML_S = 1.0           # draw detected if (expected refill - measured rate) > this
+DRAW_FALL = 0.3           # level must be falling faster than this (ml/s) to count as a draw
+GRACE_MS = 3000           # UI leaves "dispensing" this long after the last real draw
 SESSION_END_MS = 10000    # session ends after this long with no draw
 MIN_SESSION_ML = 10       # ignore "sessions" smaller than this (bumps, vibration)
 NB = 20                   # refill-profile bins (5% each)
@@ -58,6 +64,9 @@ FULL_FRAC = 0.98          # >= this fraction counts as full
 FULL_RATE = 0.05          # ml/s; profile rate below this (when >60% full) = "full"
 LEARN_MS = 10000          # refill-rate learning window
 SAVE_MS = 600000          # save learned profile at most this often
+ANCHOR_MS = 600000        # must sit stable near-full this long (10 min) to re-anchor 100%
+ANCHOR_BAND = 0.003       # max spread during that time, fraction of capacity
+ANCHOR_MAX = 1.05         # ignore if above this fraction (something is off)
 CAPTURE_N = 30            # samples per calibration capture (~3 s)
 DRIFT_G = 2.0             # reject a capture if the reading moved more than this
 DEFAULT_CPG = 215.0       # rough counts/gram, only used for the drift check
@@ -134,6 +143,12 @@ class Tank:
         self.t_save = now
         self.last_draw = time.ticks_add(now, -60000)
         self.sessions = []      # newest first: [ml, seconds]
+        # near-full stability tracker (re-anchors 100%)
+        self.stab_n = 0
+        self.stab_sum = 0
+        self.stab_min = 0
+        self.stab_max = 0
+        self.stab_t0 = now
         self.reset_session()
         self.load()
 
@@ -176,6 +191,7 @@ class Tank:
         self.L = 0.0
         self.full = False
         self.eta = None
+        self.stab_reset()
         self.reset_session()
         try:
             import os
@@ -192,6 +208,10 @@ class Tank:
         self.sess_snap = 0.0
         self.sess_dur = 0.0
         self.flow = 0.0
+
+    def dispensing(self):
+        """True while a session is open AND a real draw happened recently."""
+        return self.sess_active and time.ticks_diff(time.ticks_ms(), self.last_draw) < GRACE_MS
 
     # ---------------- history helpers ----------------
     def back(self, secs):
@@ -297,6 +317,39 @@ class Tank:
                 return True
         return False
 
+    # ---------------- 100% re-anchor ----------------
+    def stab_reset(self):
+        self.stab_n = 0
+        self.stab_sum = 0
+
+    def anchor_full(self, now, r8):
+        """If the tank sits near-full and perfectly still for ANCHOR_MS, that is 100%."""
+        f = self.L / self.cap
+        if (self.sess_active or f < FULL_FRAC or f > ANCHOR_MAX
+                or time.ticks_diff(now, self.last_draw) < 60000):
+            self.stab_reset()
+            return
+        if self.stab_n:
+            lo = min(self.stab_min, r8)
+            hi = max(self.stab_max, r8)
+            # k is ml per raw8 count, so (hi - lo) * k is already ml
+            if (hi - lo) * abs(self.k) > ANCHOR_BAND * self.cap:
+                self.stab_reset()       # moved too much, restart the window
+        if self.stab_n == 0:
+            self.stab_t0 = now
+            self.stab_min = r8
+            self.stab_max = r8
+        else:
+            self.stab_min = min(self.stab_min, r8)
+            self.stab_max = max(self.stab_max, r8)
+        self.stab_n += 1
+        self.stab_sum += r8
+        if time.ticks_diff(now, self.stab_t0) >= ANCHOR_MS:
+            self.set_cal(self.stab_sum // self.stab_n, self.empty8, self.cap)
+            self.dirty = True
+            self.hist = []              # old levels were on the previous scale
+            self.stab_reset()
+
     # ---------------- sampling ----------------
     def ingest(self, raw):
         self.seq += 1
@@ -345,6 +398,7 @@ class Tank:
         self.full = self.is_full()
 
         if self.step:
+            self.stab_reset()
             self.reset_session()
             if self.step == "refill":
                 self.learn(now)
@@ -353,10 +407,11 @@ class Tank:
                     self.save()
         else:
             self.track(now, dt, L)
+            self.anchor_full(now, r8)
             if not self.sess_active and time.ticks_diff(now, self.last_draw) > 15000:
                 self.learn(now)
 
-        if not self.sess_active and not self.full:
+        if not self.dispensing() and not self.full:
             self.eta = self.eta_s()
         else:
             self.eta = None
@@ -370,7 +425,9 @@ class Tank:
         if r is None or r < 0:
             r = 0.0
         s = self.slope(DW)
-        drawing = s is not None and (r - s) > DRAW_ML_S
+        # a draw needs the level to actually be falling, not just refilling
+        # slower than the profile predicts
+        drawing = s is not None and s < -DRAW_FALL and (r - s) > DRAW_ML_S
         if drawing:
             self.flow = r - s
             self.last_draw = now
@@ -494,7 +551,7 @@ class Tank:
             return "calibrating"
         if self.cap <= 0:
             return "uncal"
-        if self.sess_active:
+        if self.dispensing():
             return "dispensing"
         if self.full:
             return "full"
@@ -728,23 +785,43 @@ def wifi_connect():
     except Exception:
         pass
     wlan = network.WLAN(network.STA_IF)
+    # fully reset the radio so a leftover state from the last run can't break connect()
+    try:
+        wlan.disconnect()
+    except Exception:
+        pass
+    wlan.active(False)
+    time.sleep_ms(300)
     wlan.active(True)
+    time.sleep_ms(300)
     try:
         wlan.config(pm=wlan.PM_NONE)  # no power-save: snappier web page
     except Exception:
         pass
-    if TX_POWER:
+
+    for _ in range(3):
         try:
-            wlan.config(txpower=TX_POWER)
-        except Exception:
-            pass
-    wlan.connect(SSID, PASSWORD)
+            wlan.connect(SSID, PASSWORD)
+            break
+        except OSError as e:
+            print("connect error:", e)
+            wlan.active(False)
+            time.sleep_ms(500)
+            wlan.active(True)
+            time.sleep_ms(500)
+
     t0 = time.ticks_ms()
     while not wlan.isconnected():
         if time.ticks_diff(time.ticks_ms(), t0) > 20000:
             break
         time.sleep_ms(250)
+
     if wlan.isconnected():
+        if TX_POWER:
+            try:
+                wlan.config(txpower=TX_POWER)
+            except Exception:
+                pass
         print("RO tank at http://%s/" % wlan.ifconfig()[0])
     else:
         ap = network.WLAN(network.AP_IF)
