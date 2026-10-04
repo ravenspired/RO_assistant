@@ -1,5 +1,5 @@
 # main.py - ESP32-C3 RO water tank monitor (HX711 + 20 kg load cell), MicroPython
-# Live dashboard: ml remaining, % full, ml dispensed per session, refill rate (ml/s),
+# Live dashboard: ml remaining, % full, ml dispensed per pour, refill rate (ml/s),
 # and a live time-to-full countdown. The tank sits on the load cell under the sink.
 #
 # Wiring (ESP32-C3 Super Mini):
@@ -19,13 +19,16 @@
 #     The feed valve stays open, so the tank refills while you draw water.
 #     Dispensed = (level drop) + (expected refill during the draw), where the
 #     expected refill comes from the learned rate-vs-fullness profile.
-#     A draw only counts if the level is actually falling. A session starts when
-#     the tank drains faster than it refills and ends after 10 s with no draw.
+#     A draw only counts if the level is actually falling. A pour starts when the
+#     tank drains faster than it refills and ends after 10 s with no draw.
+#     Pours under MIN_POUR_ML (30 ml) are ignored completely (flukes).
 #     The UI leaves "dispensing" GRACE_MS after the last real draw.
 #     The profile keeps learning (EMA) whenever the tank is idle, so it follows
 #     changes in line pressure / water temperature.
-#     If the tank sits near-full and perfectly still for ANCHOR_MS, that raw
-#     value becomes the new 100% point (full8); empty and capacity stay fixed.
+#     Auto-calibration: if the tank sits near-full and perfectly still for
+#     ANCHOR_MS (1 min), that raw value becomes the new 100% point (full8);
+#     empty and capacity stay fixed.
+#     "Full" is latched with hysteresis so it doesn't flicker with "refilling".
 #   Everything is stored in tank.json on the board (calibration + refill profile).
 
 import gc
@@ -41,8 +44,8 @@ except ImportError:
     import uasyncio as asyncio
 
 # ------------------------------ CONFIG ------------------------------
-SSID = "ssid"
-PASSWORD = "pass"
+SSID = "WiFi@voronet"
+PASSWORD = "voronetwifi"
 HOSTNAME = "rotank"
 TX_POWER = 12            # dBm, helps flaky Super Mini antennas. None = default
 AP_SSID = "ROTank"        # fallback hotspot if WiFi fails at boot (IP 192.168.4.1)
@@ -57,16 +60,20 @@ DW = 2                    # seconds, window used to detect a draw
 DRAW_ML_S = 1.0           # draw detected if (expected refill - measured rate) > this
 DRAW_FALL = 0.3           # level must be falling faster than this (ml/s) to count as a draw
 GRACE_MS = 3000           # UI leaves "dispensing" this long after the last real draw
-SESSION_END_MS = 10000    # session ends after this long with no draw
-MIN_SESSION_ML = 10       # ignore "sessions" smaller than this (bumps, vibration)
+POUR_END_MS = 10000       # pour ends after this long with no draw
+MIN_POUR_ML = 30          # pours smaller than this are ignored (bumps, vibration)
 NB = 20                   # refill-profile bins (5% each)
 FULL_FRAC = 0.98          # >= this fraction counts as full
+FULL_HYST = 0.03          # once full, stay "full" until the level drops this far (fraction)
 FULL_RATE = 0.05          # ml/s; profile rate below this (when >60% full) = "full"
 LEARN_MS = 10000          # refill-rate learning window
 SAVE_MS = 600000          # save learned profile at most this often
-ANCHOR_MS = 600000        # must sit stable near-full this long (10 min) to re-anchor 100%
-ANCHOR_BAND = 0.003       # max spread during that time, fraction of capacity
+ANCHOR_MS = 60000         # must sit still near-full this long (1 min) to re-anchor 100%
+ANCHOR_BAND = 0.002       # max spread during that time, fraction of capacity
+ANCHOR_MIN = 0.90         # only anchor if the tank already reads at least this full
 ANCHOR_MAX = 1.05         # ignore if above this fraction (something is off)
+ANCHOR_QUIET_MS = 20000   # no draw for this long before anchoring
+ANCHOR_RELEASE = 0.01     # after anchoring, a move of this fraction re-arms anchoring
 CAPTURE_N = 30            # samples per calibration capture (~3 s)
 DRIFT_G = 2.0             # reject a capture if the reading moved more than this
 DEFAULT_CPG = 215.0       # rough counts/gram, only used for the drift check
@@ -121,6 +128,7 @@ class Tank:
         self.last_ms = now
         self.acc = []
         self.t_prev = now
+        self.up_ms = 0          # monotonic uptime in ms (no wraparound), used for "x h ago"
         self.raw = 0
         # calibration
         self.full8 = 0
@@ -137,19 +145,21 @@ class Tank:
         self.hist = []          # [(ticks_ms, ml)]
         self.rate = 0.0         # measured refill rate, ml/s
         self.full = False
+        self.full_exit = FULL_FRAC - FULL_HYST   # fraction below which "full" is released
         self.eta = None
         self.flow = 0.0
         self.t_learn = now
         self.t_save = now
         self.last_draw = time.ticks_add(now, -60000)
-        self.sessions = []      # newest first: [ml, seconds]
+        self.pours = []         # newest first: [ml, uptime_ms when the pour ended]
         # near-full stability tracker (re-anchors 100%)
+        self.anchored = False
         self.stab_n = 0
         self.stab_sum = 0
         self.stab_min = 0
         self.stab_max = 0
         self.stab_t0 = now
-        self.reset_session()
+        self.reset_pour()
         self.load()
 
     # ---------------- storage ----------------
@@ -190,28 +200,31 @@ class Tank:
         self.hist = []
         self.L = 0.0
         self.full = False
+        self.anchored = False
         self.eta = None
         self.stab_reset()
-        self.reset_session()
+        self.reset_pour()
         try:
             import os
             os.remove(CAL_FILE)
         except OSError:
             pass
 
-    def reset_session(self):
-        self.sess_active = False
-        self.sess_ml = 0.0
-        self.sess_L0 = 0.0
-        self.sess_refill = 0.0
-        self.sess_t0 = 0
-        self.sess_snap = 0.0
-        self.sess_dur = 0.0
+    def reset_pour(self):
+        self.pour_active = False
+        self.pour_ml = 0.0
+        self.pour_L0 = 0.0
+        self.pour_refill = 0.0
+        self.pour_t0 = 0
+        self.pour_snap = 0.0
+        self.pour_dur = 0.0
         self.flow = 0.0
 
     def dispensing(self):
-        """True while a session is open AND a real draw happened recently."""
-        return self.sess_active and time.ticks_diff(time.ticks_ms(), self.last_draw) < GRACE_MS
+        """True while a pour is open, has reached MIN_POUR_ML, AND a real draw
+        happened recently."""
+        return (self.pour_active and self.pour_ml >= MIN_POUR_ML
+                and time.ticks_diff(time.ticks_ms(), self.last_draw) < GRACE_MS)
 
     # ---------------- history helpers ----------------
     def back(self, secs):
@@ -309,15 +322,22 @@ class Tank:
         return t
 
     def is_full(self):
-        if self.L >= FULL_FRAC * self.cap:
+        """Latched with hysteresis: once full, stay full until the level drops
+        FULL_HYST below where it latched. Stops full/refilling flicker near 100%."""
+        cap = self.cap
+        if self.full:
+            return self.L > self.full_exit * cap
+        if self.L >= FULL_FRAC * cap:
+            self.full_exit = FULL_FRAC - FULL_HYST
             return True
-        if self.L > 0.85 * self.cap:
+        if self.L > 0.85 * cap:
             s = self.slope(60)
             if s is not None and -0.02 < s < 0.02:
+                self.full_exit = self.L / cap - FULL_HYST
                 return True
         return False
 
-    # ---------------- 100% re-anchor ----------------
+    # ---------------- 100% auto-calibration ----------------
     def stab_reset(self):
         self.stab_n = 0
         self.stab_sum = 0
@@ -325,8 +345,16 @@ class Tank:
     def anchor_full(self, now, r8):
         """If the tank sits near-full and perfectly still for ANCHOR_MS, that is 100%."""
         f = self.L / self.cap
-        if (self.sess_active or f < FULL_FRAC or f > ANCHOR_MAX
-                or time.ticks_diff(now, self.last_draw) < 60000):
+        if self.pour_active or f < ANCHOR_MIN:
+            self.anchored = False       # re-arm for the next time it settles
+        if self.anchored:
+            # re-arm if the reading moved away from the anchor point
+            if abs(r8 - self.full8) * abs(self.k) > ANCHOR_RELEASE * self.cap:
+                self.anchored = False
+            self.stab_reset()
+            return
+        if (self.pour_active or f < ANCHOR_MIN or f > ANCHOR_MAX
+                or time.ticks_diff(now, self.last_draw) < ANCHOR_QUIET_MS):
             self.stab_reset()
             return
         if self.stab_n:
@@ -346,9 +374,10 @@ class Tank:
         self.stab_sum += r8
         if time.ticks_diff(now, self.stab_t0) >= ANCHOR_MS:
             self.set_cal(self.stab_sum // self.stab_n, self.empty8, self.cap)
-            self.dirty = True
+            self.anchored = True
             self.hist = []              # old levels were on the previous scale
             self.stab_reset()
+            self.save()
 
     # ---------------- sampling ----------------
     def ingest(self, raw):
@@ -381,8 +410,10 @@ class Tank:
 
     # ---------------- the engine ----------------
     def tick(self, now, r8):
-        dt = time.ticks_diff(now, self.t_prev) / 1000.0
+        ms = time.ticks_diff(now, self.t_prev)
         self.t_prev = now
+        self.up_ms += ms
+        dt = ms / 1000.0
         self.raw = r8 // 8
         if self.cap <= 0:
             return
@@ -399,7 +430,7 @@ class Tank:
 
         if self.step:
             self.stab_reset()
-            self.reset_session()
+            self.reset_pour()
             if self.step == "refill":
                 self.learn(now)
                 if self.full:           # refill logging complete
@@ -408,7 +439,7 @@ class Tank:
         else:
             self.track(now, dt, L)
             self.anchor_full(now, r8)
-            if not self.sess_active and time.ticks_diff(now, self.last_draw) > 15000:
+            if not self.pour_active and time.ticks_diff(now, self.last_draw) > 15000:
                 self.learn(now)
 
         if not self.dispensing() and not self.full:
@@ -434,31 +465,33 @@ class Tank:
         else:
             self.flow = 0.0
 
-        if drawing and not self.sess_active:
+        if drawing and not self.pour_active:
             dt0, L0 = self.back(DW)
-            self.sess_active = True
-            self.sess_L0 = L0
-            self.sess_refill = r * dt0 / 1000.0
-            self.sess_t0 = time.ticks_add(now, -dt0)
-            self.sess_snap = 0.0
-            self.sess_dur = 0.0
-        elif self.sess_active:
-            self.sess_refill += r * dt
+            self.pour_active = True
+            self.pour_L0 = L0
+            self.pour_refill = r * dt0 / 1000.0
+            self.pour_t0 = time.ticks_add(now, -dt0)
+            self.pour_snap = 0.0
+            self.pour_dur = 0.0
+        elif self.pour_active:
+            self.pour_refill += r * dt
 
-        if self.sess_active:
-            ml = self.sess_L0 - L + self.sess_refill
+        if self.pour_active:
+            ml = self.pour_L0 - L + self.pour_refill
             if ml < 0:
                 ml = 0.0
-            self.sess_ml = ml
+            self.pour_ml = ml
             if drawing:
-                self.sess_snap = ml
-                self.sess_dur = time.ticks_diff(now, self.sess_t0) / 1000.0
-            elif time.ticks_diff(now, self.last_draw) > SESSION_END_MS:
-                if self.sess_snap >= MIN_SESSION_ML:
-                    self.sessions.insert(0, [round(self.sess_snap), round(self.sess_dur)])
-                    del self.sessions[5:]
-                self.sess_active = False
-                self.sess_ml = 0.0
+                self.pour_snap = ml
+                self.pour_dur = time.ticks_diff(now, self.pour_t0) / 1000.0
+            elif time.ticks_diff(now, self.last_draw) > POUR_END_MS:
+                if self.pour_snap >= MIN_POUR_ML:
+                    # stamp with uptime at the moment the last draw happened
+                    end = self.up_ms - time.ticks_diff(now, self.last_draw)
+                    self.pours.insert(0, [round(self.pour_snap), end])
+                    del self.pours[5:]
+                self.pour_active = False
+                self.pour_ml = 0.0
 
     # ---------------- calibration wizard ----------------
     async def capture(self):
@@ -512,6 +545,8 @@ class Tank:
         self.prof = [None] * NB
         self.hist = []
         self.w = {}
+        self.full = False
+        self.anchored = False
         self.step = "refill"
         self.save()
         return None
@@ -520,7 +555,7 @@ class Tank:
         if act == "start":
             self.step = "full"
             self.w = {}
-            self.reset_session()
+            self.reset_pour()
             return None
         if act == "cancel":
             self.step = None
@@ -565,6 +600,7 @@ class Tank:
             err = "HX711 not responding - check wiring"
         elif self.last_raw in (8388607, -8388608):
             err = "HX711 saturated - check load cell wiring / overload"
+        up = self.up_ms
         d = {
             "mode": self.mode(),
             "err": err,
@@ -572,7 +608,7 @@ class Tank:
             "cal": self.step,
             "cap": round(self.cap),
             "prof": [None if p is None else round(p, 3) for p in self.prof],
-            "hist": self.sessions,
+            "hist": [[p[0], (up - p[1]) // 1000] for p in self.pours],  # [ml, seconds ago]
         }
         if self.cap > 0:
             L = self.L if self.L > 0 else 0.0
@@ -582,8 +618,8 @@ class Tank:
             d["rate"] = round(self.rate if self.rate > 0 else 0.0, 3)
             d["eta"] = None if self.eta is None else round(self.eta)
             d["flow"] = round(self.flow, 1)
-            d["sess"] = round(self.sess_ml)
-            d["sess_s"] = round(self.sess_dur)
+            d["pour"] = round(self.pour_ml)
+            d["pour_s"] = round(self.pour_dur)
         return d
 
 
@@ -629,7 +665,7 @@ small{color:#777;display:block;margin-top:6px}
 <div id="lab"></div><div id="big"></div><div id="sub"></div>
 </div>
 
-<div class="card"><b>Recent sessions</b><div id="hist" style="margin-top:8px;text-align:left"></div></div>
+<div class="card"><b>Recent pours</b><div id="hist" style="margin-top:8px;text-align:left"></div></div>
 
 <div class="card"><b id="wz_t">Calibration</b>
 <p id="wz_p"></p>
@@ -646,6 +682,7 @@ const C=527.8;
 const f0=n=>Math.round(n).toLocaleString();
 const pad=n=>String(n).padStart(2,'0');
 function dur(s){s=Math.max(0,Math.round(s));const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return (h?h+':'+pad(m):m)+':'+pad(s%60)}
+function ago(s){if(s<60)return 'just now';const h=s/3600;return (h<10?h.toFixed(1):Math.round(h))+' h ago'}
 const NAMES={uncal:'Not calibrated',calibrating:'Calibrating',dispensing:'Dispensing',refilling:'Refilling',full:'Tank full',idle:'Idle'};
 let mode='',tgt=null,lastStep='x',lastProf='',busy=false;
 
@@ -697,8 +734,8 @@ function render(d){
   $('rem').textContent=has?f0(d.ml)+' ml left':'';
   let lab='',big='',sub='';
   if(mode==='dispensing'){
-    lab='Dispensed this session';big=f0(d.sess)+' ml';
-    sub=d.flow.toFixed(1)+' ml/s  |  '+d.sess_s+' s';
+    lab='Dispensed this pour';big=f0(d.pour)+' ml';
+    sub=d.flow.toFixed(1)+' ml/s  |  '+d.pour_s+' s';
   }else if(mode==='refilling'){
     lab='Full in';
     if(d.eta!=null){const t=Date.now()+d.eta*1000;if(tgt===null||Math.abs(t-tgt)>8000)tgt=t;else tgt+=(t-tgt)*0.1}else tgt=null;
@@ -709,7 +746,7 @@ function render(d){
   else if(mode==='calibrating'&&d.rate>0.03){lab='Refill logging';big=d.rate.toFixed(2)+' ml/s'}
   if(mode!=='refilling')tgt=null;
   $('lab').textContent=lab;$('big').textContent=big;$('sub').textContent=sub;
-  $('hist').innerHTML=(d.hist||[]).map(h=>'<div><b>'+f0(h[0])+' ml</b><span>'+h[1]+' s</span></div>').join('')||'<div><span>No sessions yet</span></div>';
+  $('hist').innerHTML=(d.hist||[]).map(h=>'<div><b>'+f0(h[0])+' ml</b><span>'+ago(h[1])+'</span></div>').join('')||'<div><span>No pours yet</span></div>';
   if(d.cal!==lastStep){lastStep=d.cal;setWiz(d.cal)}
   if(!d.cal)$('wz_p').textContent=has?'Calibrated: tank capacity '+f0(d.cap)+' ml. Recalibrate if you move or change the tank.':'Calibrate once to get started: fill, drain and refill the tank.';
   drawProf(d.prof);
