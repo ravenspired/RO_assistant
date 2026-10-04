@@ -1,6 +1,7 @@
 # main.py - ESP32-C3 RO water tank monitor (HX711 + 20 kg load cell), MicroPython
-# Live dashboard: ml remaining, % full, ml dispensed per pour, refill rate (ml/s),
-# and a live time-to-full countdown. The tank sits on the load cell under the sink.
+# Live dashboard: ml remaining, % full, ml dispensed per pour, fill rate and
+# dispense rate (ml/s, always shown), and a time-to-full countdown.
+# The tank sits on the load cell under the sink.
 #
 # Wiring (ESP32-C3 Super Mini):
 #   HX711 VCC -> 3V3   (keep it at 3.3 V so DOUT is safe for the C3)
@@ -11,20 +12,26 @@
 #   the calibration handles a negative sign)
 #
 # How it works
-#   Calibration (done once from the web page):
+#   Calibration (done once, from the cog / advanced options popup on the web page):
 #     1. capture FULL weight  2. close feed valve, drain tank, capture EMPTY weight
 #     3. enter grams of water collected (gives counts/gram AND tank capacity)
 #     4. open valve: the refill rate (ml/s) vs fullness (20 bins of 5%) is logged
 #   Normal use:
 #     The feed valve stays open, so the tank refills while you draw water.
-#     Dispensed = (level drop) + (expected refill during the draw), where the
-#     expected refill comes from the learned rate-vs-fullness profile.
+#     Dispensed = (level drop) + (refill during the draw). The refill during the
+#     draw comes from the learned rate-vs-fullness profile, scaled by a factor
+#     that tracks how the live (measured) rate compares to the profile.
 #     A draw only counts if the level is actually falling. A pour starts when the
 #     tank drains faster than it refills and ends after 10 s with no draw.
 #     Pours under MIN_POUR_ML (30 ml) are ignored completely (flukes).
 #     The UI leaves "dispensing" GRACE_MS after the last real draw.
-#     The profile keeps learning (EMA) whenever the tank is idle, so it follows
-#     changes in line pressure / water temperature.
+#     The profile keeps learning (EMA) whenever the tank is idle.
+#     Fill rate display: measured live (shown bold) when no draw is happening,
+#     otherwise the saved profile value is used (shown normal weight).
+#     Time to full: recalculated from the profile only when the tank crosses a
+#     5% step (or the level drops because of a draw); in between it just counts
+#     down. At 90%+ the UI just says "under 10 min" (the tail rate is too slow
+#     to predict).
 #     Auto-calibration: if the tank sits near-full and perfectly still for
 #     ANCHOR_MS (1 min), that raw value becomes the new 100% point (full8);
 #     empty and capacity stay fixed.
@@ -44,8 +51,8 @@ except ImportError:
     import uasyncio as asyncio
 
 # ------------------------------ CONFIG ------------------------------
-SSID = "WiFi@voronet"
-PASSWORD = "voronetwifi"
+SSID = "ssid"
+PASSWORD = "pass"
 HOSTNAME = "rotank"
 TX_POWER = 12            # dBm, helps flaky Super Mini antennas. None = default
 AP_SSID = "ROTank"        # fallback hotspot if WiFi fails at boot (IP 192.168.4.1)
@@ -66,6 +73,11 @@ NB = 20                   # refill-profile bins (5% each)
 FULL_FRAC = 0.98          # >= this fraction counts as full
 FULL_HYST = 0.03          # once full, stay "full" until the level drops this far (fraction)
 FULL_RATE = 0.05          # ml/s; profile rate below this (when >60% full) = "full"
+NEAR_FULL = 0.90          # at/above this fraction the UI shows "under 10 min"
+ETA_DROP = 0.01           # level must fall this far (fraction) below the last ETA step to re-estimate
+MEAS_QUIET_MS = 10000     # no draw for this long before the live fill rate counts as measured
+SCALE_MIN = 0.5           # clamp for live-vs-profile refill rate scale
+SCALE_MAX = 2.0
 LEARN_MS = 10000          # refill-rate learning window
 SAVE_MS = 600000          # save learned profile at most this often
 ANCHOR_MS = 60000         # must sit still near-full this long (1 min) to re-anchor 100%
@@ -143,11 +155,15 @@ class Tank:
         # live values
         self.L = 0.0            # ml above "empty"
         self.hist = []          # [(ticks_ms, ml)]
-        self.rate = 0.0         # measured refill rate, ml/s
+        self.rate = 0.0         # measured level slope, ml/s (negative while drawing)
         self.full = False
         self.full_exit = FULL_FRAC - FULL_HYST   # fraction below which "full" is released
-        self.eta = None
-        self.flow = 0.0
+        self.flow = 0.0         # dispense rate, ml/s (0 when not drawing)
+        self.fill = 0.0         # fill rate shown in the UI, ml/s
+        self.fill_meas = False  # True = measured live, False = saved profile value
+        self.scale = 1.0        # live refill rate / profile refill rate
+        self.eta_end = None     # uptime (ms) at which the tank is expected to be full
+        self.eta_bin = -1       # 5% step at which eta_end was last calculated
         self.t_learn = now
         self.t_save = now
         self.last_draw = time.ticks_add(now, -60000)
@@ -201,7 +217,11 @@ class Tank:
         self.L = 0.0
         self.full = False
         self.anchored = False
-        self.eta = None
+        self.eta_end = None
+        self.eta_bin = -1
+        self.scale = 1.0
+        self.fill = 0.0
+        self.fill_meas = False
         self.stab_reset()
         self.reset_pour()
         try:
@@ -272,6 +292,14 @@ class Tank:
         w = (x - lo) / (hi - lo)
         return p[lo] + (p[hi] - p[lo]) * w
 
+    def saved_rate(self, f):
+        """Saved refill rate (ml/s) at fullness f: calibration profile, scaled by
+        how the live rate has compared to it. 0 if nothing is known yet."""
+        r = self.rate_at(f)
+        if r is None or r < 0:
+            return 0.0
+        return r * self.scale
+
     def learn(self, now):
         """Update the rate-vs-fullness profile from the last 10 s of undisturbed data."""
         if time.ticks_diff(now, self.t_learn) < LEARN_MS:
@@ -298,7 +326,8 @@ class Tank:
         self.dirty = True
 
     def eta_s(self):
-        """Seconds until the refill rate has decayed to ~0 (tank effectively full)."""
+        """Seconds until the refill rate has decayed to ~0 (tank effectively full),
+        integrated over the learned rate-vs-fullness profile."""
         cap = self.cap
         x = self.L / cap
         if x < 0:
@@ -313,6 +342,7 @@ class Tank:
             r = self.rate_at(x + w / 2)
             if r is None:
                 return None
+            r *= self.scale
             if r < FULL_RATE:
                 if x > 0.6:
                     break               # shut-off region: treat as full
@@ -320,6 +350,25 @@ class Tank:
             t += cap * w / r
             x += w
         return t
+
+    def update_eta(self, f):
+        """Re-estimate time-to-full only when the tank crosses a 5% step upward,
+        or when the level fell (a draw). Otherwise eta_end stays fixed, so the
+        displayed time just counts down."""
+        if self.step or self.full or f >= NEAR_FULL:
+            self.eta_end = None
+            self.eta_bin = -1
+            return
+        if self.pour_active:
+            return                      # wait until the draw is over
+        if f < 0:
+            f = 0.0
+        b = int(f * NB)
+        if (self.eta_end is None or b > self.eta_bin
+                or f < self.eta_bin / NB - ETA_DROP):
+            e = self.eta_s()
+            self.eta_bin = b
+            self.eta_end = None if e is None else self.up_ms + int(e * 1000)
 
     def is_full(self):
         """Latched with hysteresis: once full, stay full until the level drops
@@ -427,6 +476,26 @@ class Tank:
         s = self.slope(8)
         self.rate = s if s is not None else 0.0
         self.full = self.is_full()
+        f = L / self.cap
+
+        # Fill rate for the display: measured only when nobody is drawing water
+        # (and for MEAS_QUIET_MS afterwards); otherwise the saved profile value.
+        meas = (s is not None and not self.pour_active
+                and time.ticks_diff(now, self.last_draw) > MEAS_QUIET_MS)
+        if meas:
+            self.fill = s if s > 0 else 0.0
+            self.fill_meas = True
+            p = self.rate_at(f)
+            if not self.step and p is not None and p > 0.3 and s > 0:
+                ratio = s / p
+                if ratio < SCALE_MIN:
+                    ratio = SCALE_MIN
+                elif ratio > SCALE_MAX:
+                    ratio = SCALE_MAX
+                self.scale = self.scale * 0.8 + ratio * 0.2
+        else:
+            self.fill = self.saved_rate(f)
+            self.fill_meas = False
 
         if self.step:
             self.stab_reset()
@@ -442,19 +511,16 @@ class Tank:
             if not self.pour_active and time.ticks_diff(now, self.last_draw) > 15000:
                 self.learn(now)
 
-        if not self.dispensing() and not self.full:
-            self.eta = self.eta_s()
-        else:
-            self.eta = None
+        self.update_eta(f)
 
         if self.dirty and time.ticks_diff(now, self.t_save) > SAVE_MS:
             self.save()
 
     def track(self, now, dt, L):
         """Detect draws and integrate dispensed volume, accounting for refill."""
-        r = self.rate_at(L / self.cap)
-        if r is None or r < 0:
-            r = 0.0
+        # refill rate that is happening during the draw (from the calibration
+        # profile): this water entered the tank while it was being drained
+        r = self.saved_rate(L / self.cap)
         s = self.slope(DW)
         # a draw needs the level to actually be falling, not just refilling
         # slower than the profile predicts
@@ -473,7 +539,8 @@ class Tank:
             self.pour_t0 = time.ticks_add(now, -dt0)
             self.pour_snap = 0.0
             self.pour_dur = 0.0
-        elif self.pour_active:
+        elif self.pour_active and drawing:
+            # only count refill while water is actually being drawn
             self.pour_refill += r * dt
 
         if self.pour_active:
@@ -547,6 +614,9 @@ class Tank:
         self.w = {}
         self.full = False
         self.anchored = False
+        self.scale = 1.0
+        self.eta_end = None
+        self.eta_bin = -1
         self.step = "refill"
         self.save()
         return None
@@ -609,6 +679,10 @@ class Tank:
             "cap": round(self.cap),
             "prof": [None if p is None else round(p, 3) for p in self.prof],
             "hist": [[p[0], (up - p[1]) // 1000] for p in self.pours],  # [ml, seconds ago]
+            "fill": 0,
+            "fillm": False,
+            "disp": 0,
+            "near": False,
         }
         if self.cap > 0:
             L = self.L if self.L > 0 else 0.0
@@ -616,7 +690,15 @@ class Tank:
             d["ml"] = round(L)
             d["pct"] = round(pct if pct < 100 else 100.0, 1)
             d["rate"] = round(self.rate if self.rate > 0 else 0.0, 3)
-            d["eta"] = None if self.eta is None else round(self.eta)
+            if self.eta_end is None:
+                d["eta"] = None
+            else:
+                e = (self.eta_end - up) // 1000
+                d["eta"] = e if e > 0 else 0
+            d["near"] = pct >= NEAR_FULL * 100
+            d["fill"] = round(self.fill, 2)
+            d["fillm"] = self.fill_meas
+            d["disp"] = round(self.flow, 1)
             d["flow"] = round(self.flow, 1)
             d["pour"] = round(self.pour_ml)
             d["pour_s"] = round(self.pour_dur)
@@ -629,7 +711,7 @@ INDEX = """<!doctype html><html><head><meta charset="utf-8">
 <style>
 :root{color-scheme:dark;--ac:#0a84ff}
 body{margin:0;padding:16px;font-family:system-ui,sans-serif;background:#111;color:#eee;display:flex;flex-direction:column;align-items:center}
-.card{background:#1c1c1e;border-radius:16px;padding:18px;width:100%;max-width:460px;margin-bottom:14px;box-sizing:border-box;text-align:center}
+.card{background:#1c1c1e;border-radius:16px;padding:18px;width:100%;max-width:460px;margin-bottom:14px;box-sizing:border-box;text-align:center;position:relative}
 .pill{display:inline-block;padding:4px 14px;border-radius:99px;background:#2c2c2e;font-size:13px;font-weight:600;letter-spacing:.6px;text-transform:uppercase}
 .pill.dispensing{background:#0a84ff}
 .pill.refilling{background:#30d158;color:#000}
@@ -637,12 +719,20 @@ body{margin:0;padding:16px;font-family:system-ui,sans-serif;background:#111;colo
 .pill.calibrating{background:#ff9f0a;color:#000}
 .pill.uncal{background:#5a3b00;color:#ffd48a}
 #lab{color:#999;font-size:14px;margin-top:6px;min-height:18px}
-#big{font-size:clamp(36px,13vw,58px);font-weight:600;font-variant-numeric:tabular-nums;margin:2px 0}
+#big{font-size:clamp(32px,11vw,52px);font-weight:600;font-variant-numeric:tabular-nums;margin:2px 0}
 #sub{color:#999;font-size:14px;min-height:20px}
 #banner{display:none;background:#5a1010;color:#ffb0b0;border-radius:10px;padding:10px;font-size:14px;margin-bottom:10px}
+.stats{display:flex;gap:8px;margin-top:14px}
+.stats div.s{flex:1;background:#2c2c2e;border-radius:12px;padding:10px}
+.stats span{display:block;color:#999;font-size:12px}
+.stats .v{font-size:20px;font-variant-numeric:tabular-nums;margin-top:2px;color:#aaa;font-weight:400}
+.stats .v.m{font-weight:800;color:#fff}
+.stats small{display:inline;margin:0;font-size:11px;color:#777}
 .row{display:flex;gap:8px;margin-top:12px}
 button{flex:1;padding:14px;border:0;border-radius:12px;background:#2c2c2e;color:#eee;font-size:16px}
 button.p{background:#0a84ff;color:#fff}
+button.ic{flex:none;width:40px;height:40px;padding:0;font-size:20px;line-height:40px}
+#cog{position:absolute;top:10px;right:10px}
 .in{display:none;gap:8px;margin-top:10px}
 input{flex:1;background:#2c2c2e;border:0;border-radius:10px;color:#eee;padding:12px;font-size:16px;min-width:0}
 #wz_p{color:#bbb;font-size:14px;line-height:1.4;margin:8px 0 0}
@@ -652,8 +742,13 @@ input{flex:1;background:#2c2c2e;border:0;border-radius:10px;color:#eee;padding:1
 #prof{display:flex;align-items:flex-end;gap:2px;height:80px;margin-top:10px}
 .bar{flex:1;background:var(--ac);border-radius:2px 2px 0 0}
 small{color:#777;display:block;margin-top:6px}
+#modal{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.65);overflow:auto;padding:16px;box-sizing:border-box;z-index:9;justify-content:center;align-items:flex-start}
+.sheet{background:#1c1c1e;border-radius:16px;padding:18px;width:100%;max-width:460px;box-sizing:border-box}
+.mh{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;font-size:17px}
+.sec{border-top:1px solid #2c2c2e;margin-top:14px;padding-top:14px;text-align:center}
 </style></head><body>
 <div class="card">
+<button class="ic" id="cog" aria-label="Advanced options" onclick="openM()">&#9881;</button>
 <div id="banner"></div>
 <span class="pill" id="pill">...</span>
 <div><svg viewBox="0 0 200 200" width="230" height="230">
@@ -663,18 +758,24 @@ small{color:#777;display:block;margin-top:6px}
 <text id="rem" x="100" y="132" text-anchor="middle" font-size="15" fill="#aaa"></text>
 </svg></div>
 <div id="lab"></div><div id="big"></div><div id="sub"></div>
+<div class="stats">
+<div class="s"><span>Fill rate</span><div class="v" id="fillv">--</div><small id="fills"></small></div>
+<div class="s"><span>Dispense rate</span><div class="v" id="dispv">--</div></div>
+</div>
 </div>
 
 <div class="card"><b>Recent pours</b><div id="hist" style="margin-top:8px;text-align:left"></div></div>
 
-<div class="card"><b id="wz_t">Calibration</b>
+<div id="modal" onclick="if(event.target===this)closeM()"><div class="sheet">
+<div class="mh"><b>Advanced options</b><button class="ic" onclick="closeM()" aria-label="Close">&#10005;</button></div>
+<div class="sec" style="border-top:0;margin-top:0;padding-top:0"><b id="wz_t">Calibration</b>
 <p id="wz_p"></p>
 <div class="in" id="wz_in"><input id="gin" inputmode="decimal" placeholder="grams (ml) collected"></div>
 <div class="row"><button class="p" id="wz_b"></button><button id="wz_c"></button></div>
 <div id="msg"></div></div>
-
-<div class="card"><b>Refill rate vs fullness</b><div id="prof"></div>
+<div class="sec"><b>Refill rate vs fullness</b><div id="prof"></div>
 <small>Each bar = 5% of the tank, left = empty. Learned automatically (ml/s).</small></div>
+</div></div>
 
 <script>
 const $=id=>document.getElementById(id);
@@ -683,6 +784,8 @@ const f0=n=>Math.round(n).toLocaleString();
 const pad=n=>String(n).padStart(2,'0');
 function dur(s){s=Math.max(0,Math.round(s));const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return (h?h+':'+pad(m):m)+':'+pad(s%60)}
 function ago(s){if(s<60)return 'just now';const h=s/3600;return (h<10?h.toFixed(1):Math.round(h))+' h ago'}
+function openM(){$('modal').style.display='flex'}
+function closeM(){$('modal').style.display='none'}
 const NAMES={uncal:'Not calibrated',calibrating:'Calibrating',dispensing:'Dispensing',refilling:'Refilling',full:'Tank full',idle:'Idle'};
 let mode='',tgt=null,lastStep='x',lastProf='',busy=false;
 
@@ -735,17 +838,25 @@ function render(d){
   let lab='',big='',sub='';
   if(mode==='dispensing'){
     lab='Dispensed this pour';big=f0(d.pour)+' ml';
-    sub=d.flow.toFixed(1)+' ml/s  |  '+d.pour_s+' s';
+    sub=d.pour_s+' s';
   }else if(mode==='refilling'){
     lab='Full in';
-    if(d.eta!=null){const t=Date.now()+d.eta*1000;if(tgt===null||Math.abs(t-tgt)>8000)tgt=t;else tgt+=(t-tgt)*0.1}else tgt=null;
-    big=tgt?dur((tgt-Date.now())/1000):'--';
-    sub='Filtering '+d.rate.toFixed(2)+' ml/s  ('+(d.rate*60).toFixed(0)+' ml/min)';
+    if(d.near){big='Under 10 min';tgt=null}
+    else{
+      if(d.eta!=null){const t=Date.now()+d.eta*1000;if(tgt===null||Math.abs(t-tgt)>3000)tgt=t}else tgt=null;
+      big=tgt?dur((tgt-Date.now())/1000):'--';
+    }
   }else if(mode==='full'){lab='Ready';big='Full'}
   else if(mode==='idle'){lab='Not refilling';big='--';sub='Supply valve closed or no pressure?'}
+  else if(mode==='uncal'){big='--';sub='Open the cog to calibrate'}
   else if(mode==='calibrating'&&d.rate>0.03){lab='Refill logging';big=d.rate.toFixed(2)+' ml/s'}
-  if(mode!=='refilling')tgt=null;
+  if(mode!=='refilling'||d.near)tgt=null;
   $('lab').textContent=lab;$('big').textContent=big;$('sub').textContent=sub;
+  const fv=$('fillv');
+  fv.textContent=(d.fill||0).toFixed(2)+' ml/s';
+  fv.className='v '+(d.fillm?'m':'');
+  $('fills').textContent=d.fillm?'':'saved';
+  $('dispv').textContent=(d.disp||0).toFixed(1)+' ml/s';
   $('hist').innerHTML=(d.hist||[]).map(h=>'<div><b>'+f0(h[0])+' ml</b><span>'+ago(h[1])+'</span></div>').join('')||'<div><span>No pours yet</span></div>';
   if(d.cal!==lastStep){lastStep=d.cal;setWiz(d.cal)}
   if(!d.cal)$('wz_p').textContent=has?'Calibrated: tank capacity '+f0(d.cap)+' ml. Recalibrate if you move or change the tank.':'Calibrate once to get started: fill, drain and refill the tank.';
