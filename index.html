@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RO tank</title>
+<style>
+:root{
+  --paper:#eef2f1; --card:#fbfcfb; --line:#d3dcda; --ink:#12262e; --mute:#5d727a;
+  --w1:#4fb3e8; --w2:#1d6fa8; --glass:#f7fafa; --amber:#b87310; --green:#2b8a57; --red:#c2403a;
+  --btn:#12262e; --btnink:#f2f6f5;
+}
+@media (prefers-color-scheme:dark){
+  :root{--paper:#0e1a20; --card:#15262e; --line:#27404a; --ink:#e7f0f1; --mute:#8aa4ad;
+        --w1:#46b0ea; --w2:#1c6ea8; --glass:#0f1d24; --amber:#e0a23c; --green:#4cc489; --red:#ef6a63;
+        --btn:#e7f0f1; --btnink:#0e1a20;}
+}
+*{box-sizing:border-box}
+html{background:var(--paper)}
+body{margin:0;color:var(--ink);font:16px/1.45 "Avenir Next","Segoe UI",system-ui,sans-serif;font-variant-numeric:tabular-nums;
+     -webkit-text-size-adjust:100%}
+header{display:flex;align-items:center;gap:12px;padding:14px 20px;flex-wrap:wrap}
+header h1{font-size:19px;font-weight:650;margin:0;letter-spacing:.2px}
+.chip{display:inline-flex;align-items:center;gap:8px;padding:4px 12px;border-radius:99px;border:1px solid var(--line);background:var(--card);font-size:14px}
+.chip i{width:9px;height:9px;border-radius:50%;background:var(--mute)}
+.chip.water i{background:var(--w1);animation:pulse 1.2s ease-in-out infinite}
+.chip.ok i{background:var(--green)} .chip.warn i{background:var(--amber)} .chip.bad i{background:var(--red)}
+@keyframes pulse{50%{opacity:.35}}
+.sp{flex:1}
+.sub{color:var(--mute);font-size:14px}
+#banner{display:none;margin:0 20px 8px;padding:10px 14px;border-radius:10px;background:var(--red);color:#fff;font-size:15px}
+main{display:grid;grid-template-columns:minmax(250px,360px) 1fr;gap:18px;padding:6px 20px 28px;max-width:1080px;margin:0 auto}
+@media (max-width:720px){main{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+.card h2{font-size:15px;font-weight:650;margin:0 0 8px;color:var(--mute)}
+.col{display:flex;flex-direction:column;gap:14px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media (max-width:480px){.grid2{grid-template-columns:1fr}}
+
+/* tank */
+.tankcard{display:flex;flex-direction:column;align-items:center;gap:10px;position:sticky;top:12px;align-self:start}
+@media (max-width:720px){.tankcard{position:static}}
+#tank{width:100%;max-width:300px;height:auto}
+#tank .body{fill:var(--glass);stroke:var(--ink);stroke-width:3}
+#tank .tick{stroke:var(--mute);stroke-width:1.5}
+#tank text.tl{fill:var(--mute);font-size:11px;text-anchor:end}
+#water{transition:transform 1s cubic-bezier(.4,0,.2,1)}
+#tank .wave{animation:slide 3.2s linear infinite}
+@keyframes slide{from{transform:translateX(0)}to{transform:translateX(-67px)}}
+#tank.low .w1{stop-color:#e8b45a} #tank.low .w2{stop-color:#b87310}
+#pctText{font-size:44px;font-weight:700;text-anchor:middle;paint-order:stroke;stroke-width:5px;stroke-linejoin:round;transition:fill .6s}
+#tank.hi #pctText{fill:#fff;stroke:rgba(10,40,70,.45)}
+#tank.lo #pctText{fill:var(--ink);stroke:var(--glass)}
+.mlbig{font-size:46px;font-weight:700;line-height:1}
+.mlbig small{font-size:18px;font-weight:500;color:var(--mute);margin-left:6px}
+.cap{color:var(--mute);font-size:14px}
+
+/* numbers */
+.big{font-size:38px;font-weight:700;line-height:1.05}
+.big small{font-size:15px;font-weight:500;color:var(--mute);margin-left:5px}
+.row{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-top:1px solid var(--line);font-size:15px}
+.row:first-of-type{border-top:0}
+.row b{font-weight:600}
+.bar{height:6px;border-radius:4px;background:var(--line);overflow:hidden;margin-top:8px}
+.bar i{display:block;height:100%;width:0;background:var(--w2);transition:width .4s linear}
+.pouring{border-color:var(--w2);box-shadow:0 0 0 2px color-mix(in srgb,var(--w1) 35%,transparent)}
+.muted{color:var(--mute)}
+table{width:100%;border-collapse:collapse;font-size:15px}
+td,th{padding:6px 4px;text-align:left;border-top:1px solid var(--line);font-weight:400}
+th{color:var(--mute);font-size:14px;border-top:0}
+td:nth-child(n+2),th:nth-child(n+2){text-align:right}
+
+/* buttons */
+button{font:inherit;font-weight:600;border:1px solid var(--btn);background:var(--btn);color:var(--btnink);padding:9px 16px;border-radius:10px;cursor:pointer}
+button.alt{background:transparent;color:var(--ink);border-color:var(--line)}
+button:focus-visible,input:focus-visible,summary:focus-visible,a:focus-visible{outline:3px solid var(--w1);outline-offset:2px}
+button:disabled{opacity:.5;cursor:default}
+.btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+input[type=number]{font:inherit;padding:9px 12px;border-radius:10px;border:1px solid var(--line);background:var(--paper);color:var(--ink);width:150px}
+a{color:var(--w2)}
+details summary{cursor:pointer;font-weight:600}
+.live{margin:10px 0 0;padding:8px 12px;border-radius:10px;background:var(--paper);font-size:15px}
+.live.good{border-left:4px solid var(--green)} .live.wait{border-left:4px solid var(--amber)}
+#toast{position:fixed;left:50%;bottom:18px;transform:translate(-50%,30px);opacity:0;transition:.3s;background:var(--ink);color:var(--paper);
+       padding:10px 16px;border-radius:10px;max-width:90vw;font-size:15px;pointer-events:none;z-index:9}
+#toast.on{opacity:1;transform:translate(-50%,0)} #toast.err{background:var(--red);color:#fff}
+@media (prefers-reduced-motion:reduce){#tank .wave,.chip.water i{animation:none}#water,.bar i{transition:none}}
+</style>
+</head>
+<body>
+<header>
+  <h1>RO tank</h1>
+  <span class="chip" id="chip"><i></i><span id="chipTxt">connecting</span></span>
+  <span class="sp"></span>
+  <span class="sub" id="meta"></span>
+</header>
+<div id="banner"></div>
+
+<main>
+  <section class="card tankcard" aria-label="Tank level">
+    <svg id="tank" viewBox="0 0 220 300" role="img" aria-label="Tank level">
+      <defs>
+        <linearGradient id="wg" x1="0" y1="0" x2="0" y2="1">
+          <stop class="w1" offset="0" stop-color="var(--w1)"/><stop class="w2" offset="1" stop-color="var(--w2)"/>
+        </linearGradient>
+        <clipPath id="clip"><rect x="44" y="20" width="142" height="260" rx="11"/></clipPath>
+      </defs>
+      <rect class="body" x="42" y="18" width="146" height="264" rx="13"/>
+      <g clip-path="url(#clip)">
+        <g id="water" style="transform:translateY(270px)">
+          <g transform="translate(44,20)">
+            <path class="wave" fill="url(#wg)" d="M0 0 q16.75 -7 33.5 0 t33.5 0 t33.5 0 t33.5 0 t33.5 0 t33.5 0 t33.5 0 V300 H0 Z"/>
+          </g>
+        </g>
+      </g>
+      <g>
+        <line class="tick" x1="30" x2="40" y1="85" y2="85"/><text class="tl" x="26" y="89">75</text>
+        <line class="tick" x1="30" x2="40" y1="150" y2="150"/><text class="tl" x="26" y="154">50</text>
+        <line class="tick" x1="30" x2="40" y1="215" y2="215"/><text class="tl" x="26" y="219">25</text>
+      </g>
+      <text id="pctText" x="115" y="165" class="lo">–</text>
+    </svg>
+    <div style="text-align:center">
+      <div class="mlbig"><span id="ml">–</span><small>ml left</small></div>
+      <div class="cap" id="capTxt"></div>
+    </div>
+  </section>
+
+  <div class="col">
+    <section class="card" id="pourCard" aria-live="polite">
+      <h2 id="pourH">Pour</h2>
+      <div id="pourBody"></div>
+    </section>
+
+    <div class="grid2">
+      <section class="card">
+        <h2>Water in</h2>
+        <div class="big"><span id="inR">–</span><small>ml/s</small></div>
+        <div class="sub" id="inSub"></div>
+      </section>
+      <section class="card">
+        <h2>Water out</h2>
+        <div class="big"><span id="outR">–</span><small>ml/s</small></div>
+        <div class="sub" id="outSub"></div>
+      </section>
+    </div>
+
+    <section class="card">
+      <h2>Refill</h2>
+      <div id="refillBody"></div>
+    </section>
+
+    <section class="card">
+      <h2>Recent pours</h2>
+      <div id="recent"></div>
+    </section>
+
+    <section class="card">
+      <h2>Calibration</h2>
+      <div id="wiz"></div>
+      <p class="sub" style="margin:14px 0 0">Data: <a href="/pours.csv">pours.csv</a> and <a href="/refill_log.csv">refill_log.csv</a></p>
+    </section>
+  </div>
+</main>
+<div id="toast" role="status"></div>
+
+<script>
+const $=id=>document.getElementById(id);
+let S=null, recvAt=0, timer=null, fails=0, wizKey='';
+
+const fmt=n=>Math.round(n).toLocaleString();
+function dur(s){s=Math.max(0,Math.round(s));const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60,p=v=>String(v).padStart(2,'0');
+  return h?`${h}:${p(m)}:${p(x)}`:`${m}:${p(x)}`}
+function ago(s){if(s<60)return Math.round(s)+' s ago';if(s<3600)return Math.round(s/60)+' min ago';
+  const h=s/3600;return (h<10?h.toFixed(1):Math.round(h))+' h ago'}
+function clock(ts){return new Date(ts).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}
+
+/* ---------- polling ---------- */
+async function poll(){
+  clearTimeout(timer);
+  let delay=1000;
+  try{
+    const ctl=new AbortController(), to=setTimeout(()=>ctl.abort(),4000);
+    const r=await fetch('/api/state',{cache:'no-store',signal:ctl.signal});
+    clearTimeout(to);
+    S=await r.json(); recvAt=performance.now(); fails=0;
+    $('banner').style.display='none';
+    render();
+    delay=(S.pour)?400:1000;
+  }catch(e){
+    fails++;
+    if(fails>=2){$('banner').textContent='Can’t reach the Pico. Retrying…';$('banner').style.display='block';setChip('lost contact','bad')}
+    delay=2000;
+  }
+  timer=setTimeout(poll,delay);
+}
+async function act(a,extra){
+  try{
+    const r=await fetch('/api/cal?action='+a+(extra||''),{method:'POST'});
+    const j=await r.json(); toast(j.msg,j.ok);
+  }catch(e){toast('Request failed. Is the Pico reachable?',false)}
+  poll();
+}
+let toastT;
+function toast(m,ok){const t=$('toast');t.textContent=m;t.className='on'+(ok?'':' err');clearTimeout(toastT);toastT=setTimeout(()=>t.className='',5000)}
+
+/* ---------- rendering ---------- */
+const STATES={uncal:['Needs calibration','warn'],fault:['No scale readings','bad'],pour:['Pouring','water'],
+  full:['Tank full','ok'],refill:['Refilling','water'],stalled:['Not refilling','warn'],idle:['Idle','']};
+function setChip(txt,cls){$('chip').className='chip '+cls;$('chipTxt').textContent=txt}
+
+function setTank(pct,hasData){
+  const p=hasData?Math.max(0,Math.min(1,pct/100)):0, H=260;
+  let off=H*(1-p); if(p>=0.99)off=-8; else if(p<=0.002)off=270;
+  $('water').style.transform=`translateY(${off}px)`;
+  const t=$('tank'); t.classList.toggle('low',hasData&&p<0.15);
+  t.classList.toggle('hi',p>0.45); t.classList.toggle('lo',p<=0.45);
+  $('pctText').textContent=hasData?Math.round(pct)+'%':'–';
+}
+
+function render(){
+  const s=S, has=s.cal&&s.ml!==undefined;
+  const st=STATES[s.state]||['',''];
+  setChip(st[0],st[1]);
+  $('meta').textContent=(s.ip?s.ip+'  ':'')+'up '+dur(s.up);
+  setTank(has?s.pct:0,has);
+  $('ml').textContent=has?fmt(s.ml):'–';
+  $('capTxt').textContent=has?`${s.pct.toFixed(1)}% of ${fmt(s.cap)} ml`:(s.cal?'':'Calibrate to see volume');
+  if(s.state==='fault'&&s.cal)$('banner').textContent='The HX711 isn’t sending readings. Check the wiring and power.',$('banner').style.display='block';
+  renderPour(); renderFlow(); renderRefill(); renderRecent(); renderWiz();
+}
+
+function renderPour(){
+  const s=S, c=$('pourCard');
+  if(!s.cal||s.ml===undefined){c.classList.remove('pouring');$('pourH').textContent='Pour';
+    $('pourBody').innerHTML='<p class="muted" style="margin:0">Pours appear here once the scale is calibrated.</p>';return}
+  if(s.pour){
+    c.classList.add('pouring'); $('pourH').textContent='Pouring now';
+    const left=s.pour.left, w=Math.min(100,left/10*100);
+    $('pourBody').innerHTML=
+     `<div class="big">${fmt(s.pour.ml)}<small>ml dispensed</small></div>
+      <div class="row"><span>Flow out</span><b>${s.out.toFixed(1)} ml/s</b></div>
+      <div class="row"><span>Time</span><b>${dur(s.pour.dur)}</b></div>
+      <div class="row"><span>Tank at start</span><b>${Math.round(s.pour.f0)}%</b></div>
+      <div class="sub" style="margin-top:8px">${left<9.9?`Pour ends in ${Math.ceil(left)} s unless water is drawn again`:'Water is flowing'}</div>
+      <div class="bar"><i style="width:${w}%"></i></div>`;
+  }else{
+    c.classList.remove('pouring'); $('pourH').textContent='Pour';
+    let h='<p style="margin:0 0 6px">No pour in progress. A pour ends after 10 seconds without water being drawn.</p>';
+    if(s.last){const L=s.last,a=(L[0]&&s.ep)?ago(s.ep-L[0]):'';
+      h+=`<div class="row"><span>Last pour</span><b>${fmt(L[1])} ml</b></div>
+          <div class="row"><span>Took</span><b>${dur(L[2])}${a?', '+a:''}</b></div>`}
+    $('pourBody').innerHTML=h;
+  }
+}
+
+function renderFlow(){
+  const s=S;
+  if(!s.cal||s.ml===undefined){$('inR').textContent=$('outR').textContent='–';$('inSub').textContent=$('outSub').textContent='';return}
+  $('inR').textContent=s.in.toFixed(2); $('outR').textContent=s.out.toFixed(2);
+  let a;
+  if(s.in_src==='meas')a=`Measured over the last ${s.win} s`;
+  else a=s.curve_ok?'Estimated from the refill curve':'No refill curve yet, so this reads 0 while pouring';
+  $('inSub').textContent=a;
+  $('outSub').textContent=s.pour?`Scale loss plus the water arriving meanwhile`:(s.out>0.05?'Slow draw or leak':'Nothing drawn');
+}
+
+function renderRefill(){
+  const s=S,b=$('refillBody');
+  if(!s.cal||s.ml===undefined){b.innerHTML='<p class="muted" style="margin:0">–</p>';return}
+  if(s.state==='full'){b.innerHTML='<div class="big">Full</div><div class="sub">The tank is at '+s.pct.toFixed(1)+'%.</div>';return}
+  if(s.state==='pour'){b.innerHTML='<div class="big">–</div><div class="sub">The countdown resumes when the pour ends.</div>';return}
+  if(s.state==='stalled'){b.innerHTML='<div class="big">Stalled</div><div class="sub">No inflow detected. Check that the feed valve is open and the RO has pressure.</div>';return}
+  if(s.eta!==null&&s.eta!==undefined){
+    b.innerHTML=`<div class="big"><span id="etaV">${dur(s.eta)}</span><small>until full</small></div>
+      <div class="sub" id="etaSub"></div>
+      <div class="sub">Filling at ${s.in.toFixed(2)} ml/s${s.eta_src==='linear'?', rough guess without a refill curve':''}</div>`;
+    renderEtaTick();
+  }else b.innerHTML='<div class="big">–</div><div class="sub">Measuring the fill rate. This takes about 20 seconds after a pour.</div>';
+}
+function renderEtaTick(){
+  if(!S||S.eta===null||S.eta===undefined||!$('etaV'))return;
+  const left=Math.max(0,S.eta-(performance.now()-recvAt)/1000);
+  $('etaV').textContent=dur(left);
+  $('etaSub').textContent='Full around '+clock(Date.now()+left*1000);
+}
+setInterval(renderEtaTick,1000);
+
+function renderRecent(){
+  const s=S, el=$('recent');
+  if(!s.recent||!s.recent.length){el.innerHTML='<p class="muted" style="margin:0">Nothing yet.</p>';return}
+  let h='<table><tr><th>When</th><th>Dispensed</th><th>Time</th><th>Tank</th></tr>';
+  for(const r of s.recent){
+    const when=r[0]?new Date(r[0]*1000).toLocaleString([],{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'–';
+    h+=`<tr><td>${when}</td><td>${fmt(r[1])} ml</td><td>${dur(r[2])}</td><td>${Math.round(r[3])}% to ${Math.round(r[4])}%</td></tr>`;
+  }
+  el.innerHTML=h+'</table>';
+}
+
+/* ---------- calibration wizard ---------- */
+const N=5;
+function stepHead(n,t){return `<p style="margin:0 0 4px"><b>Step ${n} of ${N}: ${t}</b></p>`}
+function buildWiz(){
+  const s=S, el=$('wiz'), st=s.step;
+  const live='<div class="live wait" id="wLive"></div>';
+  if(st==='idle'){
+    el.innerHTML=s.cal
+      ?`<p style="margin:0 0 4px">Calibrated${s.cal_at?' on '+new Date(s.cal_at*1000).toLocaleDateString():''}. Capacity ${fmt(s.cap)} ml.
+        ${s.curve_ok?'The refill curve is learned.':'No refill curve yet, so pours are not corrected for the refill happening meanwhile.'}</p>
+        <div class="btns"><button class="alt" onclick="if(confirm('Start a new calibration? The current one stays active until you finish.'))act('start')">Recalibrate</button></div>`
+      :`<p style="margin:0 0 4px">The scale needs a one-time calibration. It takes a few hours, mostly waiting for the tank to refill, and you only need to be there for the first few minutes.</p>
+        <div class="btns"><button onclick="act('start')">Start calibration</button></div>`;
+  }else if(st==='full'){
+    el.innerHTML=stepHead(1,'Record the full weight')+
+     '<p style="margin:0">Make sure the tank is completely full and nothing is touching it. Wait until the reading is steady.</p>'+live+
+     '<div class="btns"><button onclick="act(\'record_full\')">Record full weight</button><button class="alt" onclick="act(\'cancel\')">Cancel</button></div>';
+  }else if(st==='close'){
+    el.innerHTML=stepHead(2,'Close the inlet valve')+
+     '<p style="margin:0">Close the valve that feeds RO water into the tank, so nothing refills it while you drain it.</p>'+
+     '<div class="btns"><button onclick="act(\'valve_closed\')">The valve is closed</button><button class="alt" onclick="act(\'cancel\')">Cancel</button></div>';
+  }else if(st==='drain'){
+    el.innerHTML=stepHead(3,'Drain the whole tank')+
+     '<p style="margin:0">Collect everything that comes out in a container you can weigh. Keep the faucet open until it stops, including the last drips. Then record the empty weight.</p>'+live+
+     '<div class="btns"><button onclick="act(\'record_empty\')">The tank is empty, record it</button><button class="alt" onclick="act(\'cancel\')">Cancel</button></div>';
+  }else if(st==='grams'){
+    el.innerHTML=stepHead(4,'Enter the collected water')+
+     '<p style="margin:0 0 10px">Weigh the water you drained, in grams. This sets the scale factor and the tank capacity.</p>'+
+     '<input type="number" id="grams" inputmode="decimal" min="500" step="1" placeholder="grams"> '+
+     '<div class="btns"><button onclick="act(\'grams\',\'&g=\'+encodeURIComponent($(\'grams\').value))">Save weight</button><button class="alt" onclick="act(\'cancel\')">Cancel</button></div>';
+  }else if(st==='open'){
+    el.innerHTML=stepHead(5,'Refill and log the fill rate')+
+     '<p style="margin:0">The scale is calibrated and already shows volume. Now open the inlet valve so the tank refills, then start logging. Don’t use the faucet during the refill.</p>'+
+     '<div class="btns"><button onclick="act(\'start_refill\')">The valve is open, start logging</button><button class="alt" onclick="act(\'skip\')">Skip this</button></div>';
+  }else if(st==='refill'){
+    el.innerHTML=stepHead(5,'Logging the refill')+
+     '<p style="margin:0">Keep the faucet closed. The last liter fills very slowly, so this can take hours. It saves itself once the fill rate stops, or you can save early.</p>'+live+
+     '<div class="btns"><button onclick="act(\'finish\')">Finish and save curve</button><button class="alt" onclick="act(\'finish\',\'&force=1\')">Save what I have</button><button class="alt" onclick="act(\'skip\')">Stop logging</button></div>';
+  }
+}
+function renderWiz(){
+  const key=S.step+'|'+S.cal+'|'+S.curve_ok;
+  if(key!==wizKey){wizKey=key;buildWiz()}
+  const L=$('wLive'); if(!L)return;
+  const s=S;
+  if(s.step==='full'||s.step==='drain'){
+    const b=s.stab||{};
+    L.className='live '+(b.ok?'good':'wait');
+    L.textContent=b.n<30?'Collecting readings…':
+      (b.ok?'Steady. ':'Still settling. ')+`Reading ${fmt(b.mean)} counts, noise ±${fmt(b.std)}, drift ${fmt(b.drift)}.`;
+  }else if(s.step==='refill'){
+    const n=(s.wip&&s.wip.log_n)||0;
+    L.className='live good';
+    L.textContent=`Tank ${s.pct!==undefined?s.pct.toFixed(1):'–'}% full, filling at ${s.in!==undefined?s.in.toFixed(2):'–'} ml/s. ${n} samples logged.`;
+  }
+}
+
+poll();
+</script>
+</body>
+</html>
