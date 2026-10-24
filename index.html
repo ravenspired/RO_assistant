@@ -142,6 +142,26 @@ a{color:var(--w2)}
 .pad .k-C{background:transparent;color:var(--ink);border-color:var(--line);font-size:1.2rem}
 .pad .k-OK{background:var(--green);border-color:var(--green);color:#fff}
 
+/* stats */
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:.9rem;overflow:hidden}
+.seg button{border:0;border-radius:0;background:transparent;color:var(--ink);padding:.5rem 1.1rem;min-height:3rem}
+.seg button.on{background:var(--btn);color:var(--btnink)}
+.scards{display:grid;grid-template-columns:repeat(4,1fr);gap:.8rem;margin-bottom:1.2rem}
+.sc{display:flex;flex-direction:column;align-items:flex-start;gap:.15rem;text-align:left;background:var(--paper);color:var(--ink);
+    border:2px solid var(--line);padding:.8rem 1rem;border-radius:1rem}
+.sc span{font-size:.85rem;color:var(--mute);font-weight:600;text-transform:uppercase;letter-spacing:.06em}
+.sc b{font-size:2.6rem;line-height:1.05}
+.sc b small{font-size:1rem;color:var(--mute);font-weight:500;margin-left:.3rem}
+.sc em{font-style:normal;font-size:.9rem;color:var(--mute);font-weight:400}
+.sc.on{border-color:var(--w2);box-shadow:0 0 0 2px color-mix(in srgb,var(--w1) 30%,transparent)}
+.chead{display:flex;justify-content:space-between;align-items:baseline;gap:1rem;margin-bottom:.5rem}
+.chart{height:14rem;display:flex;align-items:flex-end;gap:2px;border-bottom:1px solid var(--line)}
+.chart button{flex:1;min-width:0;height:100%;display:flex;align-items:flex-end;padding:0;border:0;background:transparent;border-radius:0}
+.chart button i{display:block;width:100%;background:var(--w2);border-radius:.25rem .25rem 0 0}
+.chart button.sel i{background:var(--w1)}
+.chart button.z i{background:var(--line)}
+.axis{display:flex;gap:2px;margin-top:.3rem;color:var(--mute);font-size:.8rem}
+.axis span{flex:1;min-width:0;text-align:center;white-space:nowrap}
 #toast{position:fixed;left:50%;bottom:1.2rem;transform:translate(-50%,2rem);opacity:0;transition:.3s;background:var(--ink);color:var(--paper);
        padding:.7rem 1.1rem;border-radius:.8rem;max-width:90vw;font-size:1.05rem;pointer-events:none;z-index:40}
 #toast.on{opacity:1;transform:translate(-50%,0)} #toast.err{background:var(--red);color:#fff}
@@ -155,6 +175,7 @@ a{color:var(--w2)}
   .tankwrap{height:55vh;flex:none}
   .presets{grid-template-rows:none;grid-auto-rows:5rem}
   .status{grid-template-columns:1fr}
+  .scards{grid-template-columns:repeat(2,1fr)}
   .clock{display:none}
 }
 </style>
@@ -169,6 +190,9 @@ a{color:var(--w2)}
   <button class="ib" onclick="openSheet('mHist')" aria-label="Recent pours">
     <svg viewBox="0 0 24 24"><line x1="9" y1="6" x2="21" y2="6"/><line x1="9" y1="12" x2="21" y2="12"/><line x1="9" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg>
     Pours</button>
+  <button class="ib" onclick="openStats()" aria-label="Water used">
+    <svg viewBox="0 0 24 24"><line x1="6" y1="20" x2="6" y2="12"/><line x1="12" y1="20" x2="12" y2="5"/><line x1="18" y1="20" x2="18" y2="9"/></svg>
+    Stats</button>
   <button class="ib" onclick="openSheet('mSet')" aria-label="Settings">
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
   </button>
@@ -239,6 +263,24 @@ a{color:var(--w2)}
   <div class="dlg sheet">
     <header><h3>Recent pours</h3><button class="alt" onclick="closeSheet('mHist')">Close</button></header>
     <div class="sbody"><div id="recent"></div></div>
+  </div>
+</div>
+
+<!-- stats -->
+<div class="scrim" id="mStats" onclick="if(event.target===this)closeStats()">
+  <div class="dlg sheet">
+    <header><h3>Water used</h3>
+      <div class="seg" role="group" aria-label="Units"><button id="uL" onclick="setUnit('L')">Liters</button><button id="uG" onclick="setUnit('gal')">Gallons</button></div>
+      <button class="alt" onclick="closeStats()">Close</button></header>
+    <div class="sbody">
+      <div class="scards" id="scards"></div>
+      <div id="chartbox">
+        <div class="chead"><b id="cTitle"></b><span class="muted" id="cRead"></span></div>
+        <div class="chart" id="chart"></div>
+        <div class="axis" id="axis"></div>
+        <p class="muted" style="font-size:.9rem;margin:.8rem 0 0">Counts every pour the scale logs, manual and buttons. 24 h and 7 days are exact to the hour; 30 days and year count whole days including today.</p>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -462,15 +504,16 @@ function renderDisp(){
   if(D.st!==dispKey){
     dispKey=D.st; let h='';
     if(D.st==='confirm1')
-      h=`<h3>Close the tap</h3><div class="dbig">${fmt(D.target)}<small>ml</small></div>
-         <div class="btns" style="justify-content:center"><button class="go" id="dConf" disabled onclick="disp('confirm1')">Tap is closed</button>
-         <button class="alt" onclick="disp('cancel')">Cancel</button></div>`;
+      h=`<h3>Open the tap</h3><div class="dbig">${fmt(D.target)}<small>ml</small></div>
+         <div class="sub">Water starts when you confirm.</div>
+         <div class="btns" style="justify-content:center"><button class="go" id="dConf" disabled onclick="disp('confirm1')">Tap is open</button>
+         <button class="alt" onclick="call('/api/dispense?action=cancel')">Cancel</button></div>`;
     else if(D.st==='run')
       h=`<h3>Dispensing</h3><div class="dbig"><span id="dMl">0</span><small>/ ${fmt(D.target)} ml</small></div>
          <div class="bar"><i id="dBar"></i></div>
          <div class="btns" style="justify-content:center"><button class="stop" onclick="disp('stop')" style="min-width:12rem">Stop</button></div>`;
     else
-      h=`<h3>Close the tap again</h3><div class="dbig"><span id="dMl">0</span><small>ml dispensed</small></div>
+      h=`<h3>Close the tap</h3><div class="dbig"><span id="dMl">0</span><small>ml dispensed</small></div>
          <div class="sub" id="dWhy" style="min-height:1.4em"></div>
          <div class="btns" style="justify-content:center"><button class="go" id="dConf" disabled onclick="disp('confirm2')">Tap is closed</button></div>`;
     $('dBody').innerHTML=h;
@@ -547,6 +590,71 @@ function renderWiz(){
     L.className='live good';
     L.textContent=`${s.pct!==undefined?s.pct.toFixed(1):'–'}%, filling ${s.in!==undefined?s.in.toFixed(2):'–'} ml/s, ${n} samples logged.`;
   }
+}
+
+/* ---------- stats ---------- */
+const GAL=3785.411784, PERIODS=[['d1','Past 24 h'],['d7','Past 7 days'],['d30','Past 30 days'],['d365','Past year']];
+let ST=null, stSel='d7', stBar=-1, stTimer=null;
+function getUnit(){try{return localStorage.getItem('unit')==='gal'?'gal':'L'}catch(e){return 'L'}}
+function setUnit(u){try{localStorage.setItem('unit',u)}catch(e){} renderStats()}
+function vtxt(ml){
+  if(!ml)return '0';
+  const v=getUnit()==='gal'?ml/GAL:ml/1000;
+  return v.toLocaleString(undefined,v>=100?{maximumFractionDigits:0}:v>=10?{minimumFractionDigits:1,maximumFractionDigits:1}:{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+function openStats(){openSheet('mStats');loadStats();clearInterval(stTimer);stTimer=setInterval(loadStats,15000)}
+function closeStats(){closeSheet('mStats');clearInterval(stTimer)}
+async function loadStats(){
+  try{
+    const ctl=new AbortController(), to=setTimeout(()=>ctl.abort(),5000);
+    const r=await fetch('/api/stats',{cache:'no-store',signal:ctl.signal});
+    clearTimeout(to); ST=await r.json();
+  }catch(e){ST=(ST&&ST.ok)?ST:{ok:false,msg:'Could not reach the Pico.'}}
+  renderStats();
+}
+function selPeriod(k){stSel=k;stBar=-1;renderStats()}
+function pickBar(i){stBar=i;renderChart()}
+function series(k){
+  const ep=ST.ep, days=ST.days, mon=d=>d.toLocaleDateString([],{month:'short'});
+  if(k==='d1'){
+    const nh=Math.floor(ep/3600), n=ST.hours.length;
+    return ST.hours.map((v,i)=>{const d=new Date((nh-(n-1-i))*3600000);
+      return {v,lab:d.toLocaleTimeString([],{hour:'numeric'}),full:d.toLocaleString([],{weekday:'short',hour:'numeric'})}});
+  }
+  const dayAt=i=>new Date((ep-(days.length-1-i)*86400)*1000);
+  if(k==='d7'||k==='d30'){
+    const n=k==='d7'?7:30, off=days.length-n;
+    return days.slice(off).map((v,j)=>{const d=dayAt(off+j);
+      return {v,lab:n===7?d.toLocaleDateString([],{weekday:'short'}):(d.getDate()===1?mon(d):String(d.getDate())),
+              full:d.toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'})}});
+  }
+  const out=[], base=days.length-364; let pm=-1;
+  for(let w=0;w<52;w++){
+    let v=0; for(let j=0;j<7;j++)v+=days[base+w*7+j];
+    const d=dayAt(base+w*7+6), m=d.getMonth();
+    out.push({v,lab:m!==pm?mon(d):'',full:'Week ending '+d.toLocaleDateString([],{month:'short',day:'numeric'})}); pm=m;
+  }
+  return out;
+}
+function renderStats(){
+  const u=getUnit(), cards=$('scards');
+  $('uL').classList.toggle('on',u==='L'); $('uG').classList.toggle('on',u==='gal');
+  if(!ST||!ST.ok){
+    cards.innerHTML=`<p class="muted" style="grid-column:1/-1;margin:0">${ST?ST.msg:'Loading…'}</p>`;
+    $('chartbox').style.display='none'; return;
+  }
+  $('chartbox').style.display='';
+  cards.innerHTML=PERIODS.map(([k,l])=>{const w=ST.w[k];
+    return `<button class="sc${k===stSel?' on':''}" onclick="selPeriod('${k}')"><span>${l}</span><b>${vtxt(w[0])}<small>${u==='gal'?'gal':'L'}</small></b><em>${w[1]} pour${w[1]===1?'':'s'}</em></button>`}).join('');
+  renderChart();
+}
+function renderChart(){
+  const u=getUnit()==='gal'?'gal':'L', S2=series(stSel), n=S2.length, mx=Math.max(1,...S2.map(x=>x.v));
+  const step=stSel==='d1'?4:stSel==='d30'?5:1;
+  $('cTitle').textContent={d1:'Per hour',d7:'Per day',d30:'Per day',d365:'Per week'}[stSel];
+  $('chart').innerHTML=S2.map((x,i)=>`<button class="${x.v?'':'z'}${i===stBar?' sel':''}" onclick="pickBar(${i})" aria-label="${x.full}: ${vtxt(x.v)} ${u}"><i style="height:${x.v?Math.max(2,x.v/mx*100):1}%"></i></button>`).join('');
+  $('axis').innerHTML=S2.map((x,i)=>`<span>${stSel==='d365'?x.lab:((n-1-i)%step===0?x.lab:'')}</span>`).join('');
+  $('cRead').textContent=stBar>=0&&S2[stBar]?`${S2[stBar].full}: ${vtxt(S2[stBar].v)} ${u}`:`Tap a bar for details`;
 }
 
 poll();

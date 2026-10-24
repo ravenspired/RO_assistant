@@ -11,9 +11,10 @@ Files the Pico creates:
     refill_log.csv   fill rate vs fullness, logged during calibration
     pours.csv        history of every pour
     settings.json    dispense presets and the learned valve lag
+    stats.json       hourly + daily water-use totals for the Stats page
 
 Wiring is the same as your test script: DT -> GP14, SCK -> GP15.
-Dispense solenoid valve: GP16 (see VALVE_* below).
+Dispense solenoid valve: GP16 (normally open; closed only during a dispense, see VALVE_* below).
 """
 import gc
 import json
@@ -59,14 +60,21 @@ LOG_PERIOD_MS = 30000      # refill log interval during calibration
 # ---- dispense valve (normally-open solenoid on GP16) ----
 VALVE_PIN = 16
 VALVE_OPEN_LEVEL = 0       # GPIO level that lets water through. NO valve: coil off = open.
-                           # Flip to 1 if your driver stage inverts. Idle = valve held CLOSED.
+                           # Flip to 1 if your driver stage inverts. Idle = valve OPEN (coil off),
+                           # so the sink works normally. It is only closed during a dispense.
 VALVE_LAG_S = 0.25         # starting guess for close lag; learned after every dispense
 DISP_MAX_ML = 9000
 DISP_STALL_MS = 15000      # valve open this long without ~5 ml of progress -> close
 DISP_STALL_ML = 5
 DISP_MAX_MS = 900000       # hard cap on one dispense
 DISP_SETTLE_MS = 2500      # keep measuring this long after the valve closes
-DISP_CONFIRM_MS = 120000   # unconfirmed "close the tap" request cancels itself
+DISP_CONFIRM_MS = 120000   # unconfirmed "open the tap" request cancels itself (water restored)
+
+# ---- usage statistics ----
+STATS_UTC_OFFSET_H = -6    # where "midnight" falls for the daily totals (-6 = US Central standard time)
+STATS_HOURS = 168          # hourly buckets kept (drives the 24 h and 7 day figures)
+STATS_DAYS = 365           # daily buckets kept (drives the 30 day and year figures)
+CLOCK_MIN = 1000000000     # epoch values below this mean "clock not set"
 # ================================================================
 
 CALIB_FILE = "calib.json"
@@ -74,12 +82,13 @@ WIP_FILE = "cal_wip.json"
 LOG_FILE = "refill_log.csv"
 POURS_FILE = "pours.csv"
 SETTINGS_FILE = "settings.json"
+STATS_FILE = "stats.json"
 EPOCH_OFFSET = 946684800   # MicroPython epoch is 2000-01-01
 
 ntp_ok = False
 
-# Valve pin is created at import so it is driven closed as early as possible.
-valve = Pin(VALVE_PIN, Pin.OUT, value=1 - VALVE_OPEN_LEVEL)
+# Valve pin is created at import and idles OPEN (coil off): normal sink operation.
+valve = Pin(VALVE_PIN, Pin.OUT, value=VALVE_OPEN_LEVEL)
 
 
 def valve_set(is_open):
@@ -341,6 +350,9 @@ class Tank:
         self.log_n = 0
         self.settings = {"presets": [200, 1000, 3700, 2000, 0, 0, 0, 0], "lag": VALVE_LAG_S}
         self.disp = None             # dispense job, see disp_action()
+        self.stats_h = {}            # hour index -> [ml, pours]
+        self.stats_d = {}            # day index  -> [ml, pours]
+        self.stats_dirty = False
 
     # ---------- persistence ----------
     def load(self):
@@ -358,6 +370,7 @@ class Tank:
                     self.settings["lag"] = clamp(float(st["lag"]), 0.0, 1.5)
             except Exception as e:
                 print("settings load:", e)
+        self._stats_load()
         if self.wip.get("step") == "refill":
             self.log_n = max(0, self._count_lines(LOG_FILE) - 1)
         if not exists(POURS_FILE):
@@ -377,6 +390,125 @@ class Tank:
                     self.last_pour = self.pours[-1]
             except Exception as e:
                 print("pours load:", e)
+
+    # ---------- usage statistics ----------
+    def _stats_load(self):
+        st = load_json(STATS_FILE, None)
+        ok = False
+        if isinstance(st, dict) and st.get("off") == STATS_UTC_OFFSET_H:
+            try:
+                for k, ml, n in st.get("h", []):
+                    self.stats_h[int(k)] = [int(ml), int(n)]
+                for k, ml, n in st.get("d", []):
+                    self.stats_d[int(k)] = [int(ml), int(n)]
+                ok = True
+            except Exception as e:
+                print("stats load:", e)
+                self.stats_h = {}
+                self.stats_d = {}
+        if not ok:
+            self._stats_rebuild()
+
+    def _stats_rebuild(self):
+        """First boot with stats (or the UTC offset changed): rebuild from the pour history."""
+        self.stats_h = {}
+        self.stats_d = {}
+        newest = 0
+        n = 0
+        for path in ("pours_old.csv", POURS_FILE):
+            try:
+                with open(path) as f:
+                    f.readline()
+                    for line in f:
+                        p = line.split(",")
+                        try:
+                            ep = int(p[0])
+                            ml = int(p[1])
+                        except (ValueError, IndexError):
+                            continue
+                        if ep < CLOCK_MIN:
+                            continue
+                        if ep > newest:
+                            newest = ep
+                        self._stats_put(ep, ml)
+                        n += 1
+                        if n % 64 == 0:
+                            self._stats_prune(newest)
+            except OSError:
+                pass
+        if newest:
+            self._stats_prune(newest)
+        self.stats_dirty = True
+
+    def _stats_put(self, ep, ml):
+        h = ep // 3600
+        d = (ep + STATS_UTC_OFFSET_H * 3600) // 86400
+        for tbl, k in ((self.stats_h, h), (self.stats_d, d)):
+            a = tbl.get(k)
+            if a:
+                a[0] += ml
+                a[1] += 1
+            else:
+                tbl[k] = [ml, 1]
+
+    def _stats_prune(self, ep):
+        nh = ep // 3600
+        nd = (ep + STATS_UTC_OFFSET_H * 3600) // 86400
+        for k in [k for k in self.stats_h if nh - k >= STATS_HOURS]:
+            del self.stats_h[k]
+        for k in [k for k in self.stats_d if nd - k >= STATS_DAYS]:
+            del self.stats_d[k]
+
+    def _stats_add(self, ep, ml):
+        if ep < CLOCK_MIN:
+            return          # clock not set yet: can't place this pour in time
+        self._stats_put(ep, ml)
+        self._stats_prune(ep)
+        self.stats_dirty = True
+
+    def _stats_save(self):
+        self.stats_dirty = False
+        try:
+            save_json(STATS_FILE, {
+                "off": STATS_UTC_OFFSET_H,
+                "h": [[k, v[0], v[1]] for k, v in self.stats_h.items()],
+                "d": [[k, v[0], v[1]] for k, v in self.stats_d.items()]})
+        except Exception as e:
+            print("stats save:", e)
+
+    def stats_snapshot(self):
+        ep = epoch()
+        if ep < CLOCK_MIN:
+            return {"ok": False, "msg": "Clock not set yet. Waiting for network time (NTP)."}
+        nh = ep // 3600
+        nd = (ep + STATS_UTC_OFFSET_H * 3600) // 86400
+        hrs = [0] * 24
+        w1 = [0, 0]
+        w7 = [0, 0]
+        for k, v in self.stats_h.items():
+            a = nh - k
+            if 0 <= a < STATS_HOURS:
+                w7[0] += v[0]
+                w7[1] += v[1]
+                if a < 24:
+                    w1[0] += v[0]
+                    w1[1] += v[1]
+                    hrs[23 - a] = v[0]
+        days = [0] * STATS_DAYS
+        w30 = [0, 0]
+        w365 = [0, 0]
+        for k, v in self.stats_d.items():
+            a = nd - k
+            if 0 <= a < STATS_DAYS:
+                days[STATS_DAYS - 1 - a] = v[0]
+                w365[0] += v[0]
+                w365[1] += v[1]
+                if a < 30:
+                    w30[0] += v[0]
+                    w30[1] += v[1]
+        return {"ok": True, "ep": ep,
+                "w": {"d1": w1, "d7": w7, "d30": w30, "d365": w365},
+                "hours": hrs, "days": days}
 
     def _count_lines(self, path):
         n = 0
@@ -509,6 +641,7 @@ class Tank:
         if len(self.pours) > 20:
             self.pours.pop(0)
         self.last_pour = rec
+        self._stats_add(rec[0], rec[1])
         try:
             if exists(POURS_FILE) and os.stat(POURS_FILE)[6] > 200000:
                 remove("pours_old.csv")
@@ -529,7 +662,9 @@ class Tank:
             if d["st"] == "run" and (self.last_sample_t is None or t - self.last_sample_t > 1500):
                 self._disp_close(t, "sensor lost")
             elif d["st"] == "confirm1" and t - d["tq"] > DISP_CONFIRM_MS:
-                self.disp = None
+                self._disp_end()
+        if self.stats_dirty and self.disp is None:
+            self._stats_save()
         if not self.cal or not self.sensor_ok or len(self.gbuf.v) < 5:
             return
         vals = [v for tt, v in zip(self.gbuf.t, self.gbuf.v) if tt >= t - 1000]
@@ -728,9 +863,21 @@ class Tank:
         return {"ok": True, "msg": msg}
 
     # ---------- dispenser ----------
-    # Flow: start -> confirm1 (user closes tap) -> run (valve open, metered by the scale)
-    #       -> confirm2 (valve shut, user closes tap again) -> idle.
-    # The valve only opens after confirm1, and nothing else can start until confirm2.
+    # The valve is normally open: at idle (coil off) the sink works like any sink.
+    # Flow: start (valve closes) -> confirm1 (user OPENS the tap; nothing flows yet)
+    #       -> run (valve opens, metered by the scale, closes at the target)
+    #       -> confirm2 (valve shut, user CLOSES the tap) -> idle (valve back to open).
+    # The valve only opens after confirm1, and normal water is only restored after the dispense
+    # is confirmed finished (or cancelled), so nothing else can start until then.
+    def _disp_end(self):
+        """Leave dispense mode: de-energize the solenoid so the sink works normally again."""
+        valve_set(True)
+        self.disp = None
+        self.prev_t = None
+        self.out_ema = 0.0
+        self.draw_cnt = 0
+        self.last_draw_t = mono()
+
     def _disp_close(self, t, why):
         valve_set(False)
         d = self.disp
@@ -743,8 +890,9 @@ class Tank:
         d["settled"] = False
 
     def emergency(self):
+        # Only stops a dispense that is running. At idle the valve must stay open, or a sensor
+        # glitch would cut off the sink with no way to restore it.
         try:
-            valve_set(False)
             if self.disp is not None and self.disp["st"] == "run":
                 self._disp_close(mono(), "error")
         except Exception as e:
@@ -821,19 +969,19 @@ class Tank:
                 return {"ok": False, "msg": "Amount must be 1-%d ml." % DISP_MAX_ML}
             if ml > self.g + 20:
                 return {"ok": False, "msg": "Only %d ml in the tank." % max(0, int(self.g))}
-            valve_set(False)
+            valve_set(False)    # close the solenoid: nothing flows, even once the tap is opened
             self.disp = {"st": "confirm1", "target": ml, "tq": mono(), "ml": 0.0, "rate": 0.0}
-            return {"ok": True, "msg": "Close the tap."}
+            return {"ok": True, "msg": "Open the tap."}
         if d is None:
             return {"ok": False, "msg": "No dispense in progress."}
         st = d["st"]
         if act == "cancel" and st == "confirm1":
-            self.disp = None
-            return {"ok": True, "msg": "Cancelled."}
+            self._disp_end()
+            return {"ok": True, "msg": "Cancelled. Water is back on, so close the tap if you opened it."}
         if act == "confirm1" and st == "confirm1":
             t = mono()
             if self.g is None or not self.sensor_ok or len(self.gbuf.v) < 3:
-                self.disp = None
+                self._disp_end()
                 return {"ok": False, "msg": "Scale not ready."}
             vals = self.gbuf.v[-3:]
             w0 = sum(vals) / len(vals)
@@ -850,11 +998,7 @@ class Tank:
         if act == "confirm2" and st == "confirm2":
             if not d["settled"]:
                 self._disp_settle(False)
-            self.disp = None
-            self.prev_t = None
-            self.out_ema = 0.0
-            self.draw_cnt = 0
-            self.last_draw_t = mono()
+            self._disp_end()        # tap is closed: valve back to open, water restored
             return {"ok": True, "msg": "Done."}
         return {"ok": False, "msg": "That action doesn't fit the current step."}
 
@@ -1057,6 +1201,8 @@ async def handle(reader, writer):
         path, _, qs = target.partition("?")
         if path == "/api/state":
             await send(writer, 200, "application/json", json.dumps(tank.snapshot()))
+        elif path == "/api/stats":
+            await send(writer, 200, "application/json", json.dumps(tank.stats_snapshot()))
         elif path == "/api/cal":
             if method != "POST":
                 await send(writer, 405, "text/plain", "POST only")
