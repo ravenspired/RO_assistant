@@ -10,8 +10,10 @@ Files the Pico creates:
     cal_wip.json     calibration wizard progress (survives power cycles)
     refill_log.csv   fill rate vs fullness, logged during calibration
     pours.csv        history of every pour
+    settings.json    dispense presets and the learned valve lag
 
 Wiring is the same as your test script: DT -> GP14, SCK -> GP15.
+Dispense solenoid valve: GP16 (see VALVE_* below).
 """
 import gc
 import json
@@ -53,15 +55,35 @@ CAP_MS = 8000              # window used when recording full/empty weights
 DRIFT_MAX = 6000           # max counts of drift allowed while recording a weight
 MIN_CAL_COUNTS = 20000     # full and empty must differ by at least this many counts
 LOG_PERIOD_MS = 30000      # refill log interval during calibration
+
+# ---- dispense valve (normally-open solenoid on GP16) ----
+VALVE_PIN = 16
+VALVE_OPEN_LEVEL = 0       # GPIO level that lets water through. NO valve: coil off = open.
+                           # Flip to 1 if your driver stage inverts. Idle = valve held CLOSED.
+VALVE_LAG_S = 0.25         # starting guess for close lag; learned after every dispense
+DISP_MAX_ML = 9000
+DISP_STALL_MS = 15000      # valve open this long without ~5 ml of progress -> close
+DISP_STALL_ML = 5
+DISP_MAX_MS = 900000       # hard cap on one dispense
+DISP_SETTLE_MS = 2500      # keep measuring this long after the valve closes
+DISP_CONFIRM_MS = 120000   # unconfirmed "close the tap" request cancels itself
 # ================================================================
 
 CALIB_FILE = "calib.json"
 WIP_FILE = "cal_wip.json"
 LOG_FILE = "refill_log.csv"
 POURS_FILE = "pours.csv"
+SETTINGS_FILE = "settings.json"
 EPOCH_OFFSET = 946684800   # MicroPython epoch is 2000-01-01
 
 ntp_ok = False
+
+# Valve pin is created at import so it is driven closed as early as possible.
+valve = Pin(VALVE_PIN, Pin.OUT, value=1 - VALVE_OPEN_LEVEL)
+
+
+def valve_set(is_open):
+    valve.value(VALVE_OPEN_LEVEL if is_open else 1 - VALVE_OPEN_LEVEL)
 
 
 # ------------------------- small helpers -------------------------
@@ -317,6 +339,8 @@ class Tank:
         self.state = "idle"
         self.last_log_t = 0
         self.log_n = 0
+        self.settings = {"presets": [200, 1000, 3700, 2000, 0, 0, 0, 0], "lag": VALVE_LAG_S}
+        self.disp = None             # dispense job, see disp_action()
 
     # ---------- persistence ----------
     def load(self):
@@ -324,6 +348,16 @@ class Tank:
         wip = load_json(WIP_FILE, None)
         if wip:
             self.wip = wip
+        st = load_json(SETTINGS_FILE, None)
+        if isinstance(st, dict):
+            try:
+                p = st.get("presets")
+                if isinstance(p, list) and len(p) == 8:
+                    self.settings["presets"] = [int(clamp(int(x), 0, DISP_MAX_ML)) for x in p]
+                if "lag" in st:
+                    self.settings["lag"] = clamp(float(st["lag"]), 0.0, 1.5)
+            except Exception as e:
+                print("settings load:", e)
         if self.wip.get("step") == "refill":
             self.log_n = max(0, self._count_lines(LOG_FILE) - 1)
         if not exists(POURS_FILE):
@@ -390,7 +424,10 @@ class Tank:
         g = (med - self.cal["empty"]) * self.cal["scale"]
         self.g = g
         self.gbuf.add(t, g)
-        self._pour_logic(t, g)
+        if self.disp is not None:
+            self._disp_sample(t, g)
+        else:
+            self._pour_logic(t, g)
 
     def inflow_est(self, f):
         cur = self.cal.get("curve") if self.cal else None
@@ -465,6 +502,9 @@ class Tank:
         if ml < MIN_POUR_ML:
             return
         rec = [epoch(), int(round(ml)), round(dur, 1), round(p["f0"] * 100, 1), round(p["f_end"] * 100, 1)]
+        self._log_pour(rec)
+
+    def _log_pour(self, rec):
         self.pours.append(rec)
         if len(self.pours) > 20:
             self.pours.pop(0)
@@ -484,6 +524,12 @@ class Tank:
     def tick(self):
         t = mono()
         self.sensor_ok = self.last_sample_t is not None and (t - self.last_sample_t) < 3000
+        d = self.disp
+        if d is not None:
+            if d["st"] == "run" and (self.last_sample_t is None or t - self.last_sample_t > 1500):
+                self._disp_close(t, "sensor lost")
+            elif d["st"] == "confirm1" and t - d["tq"] > DISP_CONFIRM_MS:
+                self.disp = None
         if not self.cal or not self.sensor_ok or len(self.gbuf.v) < 5:
             return
         vals = [v for tt, v in zip(self.gbuf.t, self.gbuf.v) if tt >= t - 1000]
@@ -521,7 +567,7 @@ class Tank:
                 self.corr += 0.15 * (target - self.corr)
 
         in_rate, _ = self.in_display(f)
-        if self.pour is not None:
+        if self.pour is not None or self.disp is not None:
             self.state = "pour"
         elif f >= FULL_FRAC:
             self.state = "full"
@@ -681,13 +727,173 @@ class Tank:
         self._save_wip()
         return {"ok": True, "msg": msg}
 
+    # ---------- dispenser ----------
+    # Flow: start -> confirm1 (user closes tap) -> run (valve open, metered by the scale)
+    #       -> confirm2 (valve shut, user closes tap again) -> idle.
+    # The valve only opens after confirm1, and nothing else can start until confirm2.
+    def _disp_close(self, t, why):
+        valve_set(False)
+        d = self.disp
+        if d is None or d["st"] != "run":
+            return
+        d["st"] = "confirm2"
+        d["why"] = why
+        d["tc"] = t
+        d["rate_close"] = d["rate"]
+        d["settled"] = False
+
+    def emergency(self):
+        try:
+            valve_set(False)
+            if self.disp is not None and self.disp["st"] == "run":
+                self._disp_close(mono(), "error")
+        except Exception as e:
+            print("emergency:", e)
+
+    def _disp_sample(self, t, g):
+        d = self.disp
+        st = d["st"]
+        if st == "confirm1" or (st == "confirm2" and d["settled"]):
+            return
+        cap = self.cal["cap"]
+        dt = (t - d["prev"]) / 1000.0
+        d["prev"] = t
+        if dt <= 0 or dt > 1.0:
+            dt = 0.1
+        in_est = self.inflow_est(clamp(g / cap, 0.0, 1.2))
+        d["in_int"] += in_est * dt
+        vals = self.gbuf.v[-3:]
+        ws = sum(vals) / len(vals)
+        ml = max(0.0, d["w0"] - ws + d["in_int"])
+        s1 = self.gbuf.slope(t, 1000, None, 5)
+        if s1 is not None:
+            self.slope2 = s1
+            a = dt / 0.5 if dt < 0.5 else 1.0
+            d["rate"] += a * (max(0.0, in_est - s1) - d["rate"])
+        d["ml"] = ml
+        d["f_end"] = ws / cap
+        self.last_draw_t = t        # keeps the inflow estimator and pour detector out of the way
+        self.out_ema = d["rate"]
+        if st == "run":
+            if ml - d["pml"] >= DISP_STALL_ML:
+                d["pml"] = ml
+                d["pt"] = t
+            if ml + d["rate"] * self.settings["lag"] >= d["target"]:
+                self._disp_close(t, "done")
+            elif ws < 20:
+                self._disp_close(t, "tank empty")
+            elif t - d["pt"] > DISP_STALL_MS:
+                self._disp_close(t, "no flow")
+            elif t - d["t0"] > DISP_MAX_MS:
+                self._disp_close(t, "timeout")
+        elif t - d["tc"] >= DISP_SETTLE_MS:
+            self._disp_settle(True)
+
+    def _disp_settle(self, learn):
+        d = self.disp
+        d["settled"] = True
+        ml = d["ml"]
+        if learn and d["why"] == "done" and d["rate_close"] > 5.0:
+            lag = self.settings["lag"] + 0.6 * (ml - d["target"]) / d["rate_close"]
+            self.settings["lag"] = round(clamp(lag, 0.0, 1.5), 3)
+            try:
+                save_json(SETTINGS_FILE, self.settings)
+            except Exception as e:
+                print("settings save:", e)
+        if ml >= MIN_POUR_ML:
+            self._log_pour([epoch(), int(round(ml)), round((d["tc"] - d["t0"]) / 1000.0, 1),
+                            round(d["f0"] * 100, 1), round(d["f_end"] * 100, 1)])
+
+    def disp_action(self, act, q):
+        d = self.disp
+        if act == "start":
+            if d is not None:
+                return {"ok": False, "msg": "A dispense is already in progress."}
+            if not self.cal or self.g is None or not self.sensor_ok:
+                return {"ok": False, "msg": "Scale not ready."}
+            if self.pour is not None:
+                return {"ok": False, "msg": "A pour is in progress."}
+            try:
+                ml = int(float(q.get("ml", "")))
+            except ValueError:
+                return {"ok": False, "msg": "Bad amount."}
+            if ml < 1 or ml > DISP_MAX_ML:
+                return {"ok": False, "msg": "Amount must be 1-%d ml." % DISP_MAX_ML}
+            if ml > self.g + 20:
+                return {"ok": False, "msg": "Only %d ml in the tank." % max(0, int(self.g))}
+            valve_set(False)
+            self.disp = {"st": "confirm1", "target": ml, "tq": mono(), "ml": 0.0, "rate": 0.0}
+            return {"ok": True, "msg": "Close the tap."}
+        if d is None:
+            return {"ok": False, "msg": "No dispense in progress."}
+        st = d["st"]
+        if act == "cancel" and st == "confirm1":
+            self.disp = None
+            return {"ok": True, "msg": "Cancelled."}
+        if act == "confirm1" and st == "confirm1":
+            t = mono()
+            if self.g is None or not self.sensor_ok or len(self.gbuf.v) < 3:
+                self.disp = None
+                return {"ok": False, "msg": "Scale not ready."}
+            vals = self.gbuf.v[-3:]
+            w0 = sum(vals) / len(vals)
+            d.update({"w0": w0, "f0": w0 / self.cal["cap"], "f_end": w0 / self.cal["cap"],
+                      "in_int": 0.0, "ml": 0.0, "rate": 0.0, "prev": t, "t0": t,
+                      "pt": t, "pml": 0.0, "settled": False, "why": ""})
+            d["st"] = "run"
+            self.in_meas = None
+            valve_set(True)
+            return {"ok": True, "msg": "Dispensing."}
+        if act == "stop" and st == "run":
+            self._disp_close(mono(), "stopped")
+            return {"ok": True, "msg": "Stopped."}
+        if act == "confirm2" and st == "confirm2":
+            if not d["settled"]:
+                self._disp_settle(False)
+            self.disp = None
+            self.prev_t = None
+            self.out_ema = 0.0
+            self.draw_cnt = 0
+            self.last_draw_t = mono()
+            return {"ok": True, "msg": "Done."}
+        return {"ok": False, "msg": "That action doesn't fit the current step."}
+
+    def set_settings(self, q):
+        if self.disp is not None:
+            return {"ok": False, "msg": "Not while dispensing."}
+        try:
+            if "cap" in q:
+                if not self.cal:
+                    return {"ok": False, "msg": "Calibrate first."}
+                v = float(q["cap"])
+                if v < 1000 or v > 20000:
+                    return {"ok": False, "msg": "Total volume must be 1000-20000 ml."}
+                self.cal["cap"] = v
+                save_json(CALIB_FILE, self.cal)
+            for i in range(8):
+                k = "p%d" % i
+                if k in q:
+                    v = int(float(q[k]))
+                    if v < 0 or v > DISP_MAX_ML:
+                        return {"ok": False, "msg": "Preset must be 0-%d ml." % DISP_MAX_ML}
+                    self.settings["presets"][i] = v
+            save_json(SETTINGS_FILE, self.settings)
+        except ValueError:
+            return {"ok": False, "msg": "Bad value."}
+        return {"ok": True, "msg": "Saved."}
+
     # ---------- state for the dashboard ----------
     def snapshot(self):
         t = mono()
         cal = self.cal
         step = self.wip.get("step", "idle")
         d = {"ep": epoch(), "up": t // 1000, "ok": self.sensor_ok, "sat": self.sat,
-             "cal": cal is not None, "step": step, "ip": self.ip, "raw": self.med}
+             "cal": cal is not None, "step": step, "ip": self.ip, "raw": self.med,
+             "presets": self.settings["presets"], "maxml": DISP_MAX_ML}
+        dp = self.disp
+        if dp is not None:
+            d["disp"] = {"st": dp["st"], "target": dp["target"], "ml": int(round(dp["ml"])),
+                         "why": dp.get("why", ""), "set": dp.get("settled", False)}
         if step in ("full", "drain") or not cal:
             d["stab"] = self.stability()
         if step in ("close", "drain", "grams", "open", "refill"):
@@ -698,7 +904,7 @@ class Tank:
             f = ml / cap
             in_rate, src = self.in_display(f)
             p = self.pour
-            if p is not None:
+            if p is not None or dp is not None:
                 out = self.out_ema
                 net = self.slope2
             elif self.in_meas is not None:
@@ -746,6 +952,7 @@ async def sensor_task():
                 await asyncio.sleep_ms(3)
         except Exception as e:
             print("sensor:", e)
+            tank.emergency()
             await asyncio.sleep_ms(100)
 
 
@@ -856,6 +1063,16 @@ async def handle(reader, writer):
             else:
                 q = parse_qs(qs)
                 res = tank.cal_action(q.get("action", ""), q)
+                await send(writer, 200, "application/json", json.dumps(res))
+        elif path in ("/api/dispense", "/api/settings"):
+            if method != "POST":
+                await send(writer, 405, "text/plain", "POST only")
+            else:
+                q = parse_qs(qs)
+                if path == "/api/dispense":
+                    res = tank.disp_action(q.get("action", ""), q)
+                else:
+                    res = tank.set_settings(q)
                 await send(writer, 200, "application/json", json.dumps(res))
         elif path in ("/", "/index.html"):
             await send_file(writer, "index.html", "text/html; charset=utf-8")

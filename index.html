@@ -16,31 +16,37 @@
         --btn:#e7f0f1; --btnink:#0e1a20;}
 }
 *{box-sizing:border-box}
-html{background:var(--paper)}
-body{margin:0;color:var(--ink);font:16px/1.45 "Avenir Next","Segoe UI",system-ui,sans-serif;font-variant-numeric:tabular-nums;
-     -webkit-text-size-adjust:100%}
-header{display:flex;align-items:center;gap:12px;padding:14px 20px;flex-wrap:wrap}
-header h1{font-size:19px;font-weight:650;margin:0;letter-spacing:.2px}
-.chip{display:inline-flex;align-items:center;gap:8px;padding:4px 12px;border-radius:99px;border:1px solid var(--line);background:var(--card);font-size:14px}
-.chip i{width:9px;height:9px;border-radius:50%;background:var(--mute)}
+/* everything scales with the 16:9 viewport */
+html{font-size:max(12px,calc(min(100vh,56.25vw)/54));background:var(--paper)}
+body{margin:0;height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidden;color:var(--ink);
+     font:1rem/1.35 "Avenir Next","Segoe UI",system-ui,sans-serif;font-variant-numeric:tabular-nums;
+     -webkit-text-size-adjust:100%;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+header{display:flex;align-items:center;gap:.9rem;padding:.6rem 1.2rem;flex:0 0 auto}
+header h1{font-size:1.5rem;font-weight:650;margin:0}
+.chip{display:inline-flex;align-items:center;gap:.5rem;padding:.25rem .8rem;border-radius:99px;border:1px solid var(--line);background:var(--card);font-size:1rem}
+.chip i{width:.65rem;height:.65rem;border-radius:50%;background:var(--mute)}
 .chip.water i{background:var(--w1);animation:pulse 1.2s ease-in-out infinite}
 .chip.ok i{background:var(--green)} .chip.warn i{background:var(--amber)} .chip.bad i{background:var(--red)}
 @keyframes pulse{50%{opacity:.35}}
 .sp{flex:1}
-.sub{color:var(--mute);font-size:14px}
-#banner{display:none;margin:0 20px 8px;padding:10px 14px;border-radius:10px;background:var(--red);color:#fff;font-size:15px}
-main{display:grid;grid-template-columns:minmax(250px,360px) 1fr;gap:18px;padding:6px 20px 28px;max-width:1080px;margin:0 auto}
-@media (max-width:720px){main{grid-template-columns:1fr}}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
-.card h2{font-size:15px;font-weight:650;margin:0 0 8px;color:var(--mute)}
-.col{display:flex;flex-direction:column;gap:14px}
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-@media (max-width:480px){.grid2{grid-template-columns:1fr}}
+.sub{color:var(--mute);font-size:.95rem}
+.clock{text-align:right;line-height:1.1}
+.clock b{display:block;font-size:1.8rem;font-weight:650}
+.clock span{color:var(--mute);font-size:.9rem}
+.ib{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;min-width:3.4rem;height:3.4rem;padding:0 1rem;border-radius:1rem;
+    background:var(--card);color:var(--ink);border:1px solid var(--line)}
+.ib svg{width:1.6rem;height:1.6rem;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+#banner{display:none;margin:0 1.2rem .5rem;padding:.6rem .9rem;border-radius:.7rem;background:var(--red);color:#fff}
+
+main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:1rem;padding:0 1.2rem 1.2rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:1.1rem;padding:1rem 1.2rem}
+.card h2{font-size:.95rem;font-weight:650;margin:0 0 .6rem;color:var(--mute);text-transform:uppercase;letter-spacing:.06em}
+.right{display:flex;flex-direction:column;gap:1rem;min-height:0}
 
 /* tank */
-.tankcard{display:flex;flex-direction:column;align-items:center;gap:10px;position:sticky;top:12px;align-self:start}
-@media (max-width:720px){.tankcard{position:static}}
-#tank{width:100%;max-width:300px;height:auto}
+.tankcard{display:flex;flex-direction:column;gap:.6rem;min-height:0}
+.tankwrap{flex:1;min-height:0}
+#tank{width:100%;height:100%;display:block}
 #tank .body{fill:var(--glass);stroke:var(--ink);stroke-width:3}
 #tank .tick{stroke:var(--mute);stroke-width:1.5}
 #tank text.tl{fill:var(--mute);font-size:11px;text-anchor:end}
@@ -51,122 +57,217 @@ main{display:grid;grid-template-columns:minmax(250px,360px) 1fr;gap:18px;padding
 #pctText{font-size:44px;font-weight:700;text-anchor:middle;paint-order:stroke;stroke-width:5px;stroke-linejoin:round;transition:fill .6s}
 #tank.hi #pctText{fill:#fff;stroke:rgba(10,40,70,.45)}
 #tank.lo #pctText{fill:var(--ink);stroke:var(--glass)}
-.mlbig{font-size:46px;font-weight:700;line-height:1}
-.mlbig small{font-size:18px;font-weight:500;color:var(--mute);margin-left:6px}
-.cap{color:var(--mute);font-size:14px}
+.mlrow{text-align:center;font-size:3.2rem;font-weight:700;line-height:1}
+.mlrow small{font-size:1.3rem;font-weight:500;color:var(--mute);margin-left:.4rem}
+.flows{display:grid;grid-template-columns:1fr 1fr;gap:.8rem;border-top:1px solid var(--line);padding-top:.6rem}
+.flows div{text-align:center}
+.flows span{display:block;color:var(--mute);font-size:.9rem;text-transform:uppercase;letter-spacing:.06em}
+.flows b{font-size:2rem;font-weight:700}
+.flows small,.kv small,.dbig small,.pb small,.sp8 small,.kpv small{font-size:.5em;font-weight:500;color:var(--mute);margin-left:.3em}
 
-/* numbers */
-.big{font-size:38px;font-weight:700;line-height:1.05}
-.big small{font-size:15px;font-weight:500;color:var(--mute);margin-left:5px}
-.row{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-top:1px solid var(--line);font-size:15px}
-.row:first-of-type{border-top:0}
-.row b{font-weight:600}
-.bar{height:6px;border-radius:4px;background:var(--line);overflow:hidden;margin-top:8px}
+/* status */
+.status{display:grid;grid-template-columns:auto 1fr;gap:1.6rem;align-items:center;min-height:8rem}
+.stL{display:flex;align-items:center;gap:.8rem;font-size:3rem;font-weight:800;letter-spacing:.05em}
+.dot{width:1.1rem;height:1.1rem;border-radius:50%;background:var(--mute)}
+.dot.on{background:var(--w1);animation:pulse 1.1s ease-in-out infinite}
+.stB{display:flex;gap:2rem;flex-wrap:wrap;align-items:flex-start}
+.kv{display:flex;flex-direction:column;gap:.1rem}
+.kv span{color:var(--mute);font-size:.9rem}
+.kv b{font-size:1.9rem;font-weight:700;line-height:1.1}
+.kv em{font-style:normal;color:var(--mute);font-size:.9rem}
+.status.pouring{border-color:var(--w2);box-shadow:0 0 0 2px color-mix(in srgb,var(--w1) 35%,transparent)}
+.bar{height:.5rem;border-radius:.3rem;background:var(--line);overflow:hidden;margin-top:.6rem}
 .bar i{display:block;height:100%;width:0;background:var(--w2);transition:width .4s linear}
-.pouring{border-color:var(--w2);box-shadow:0 0 0 2px color-mix(in srgb,var(--w1) 35%,transparent)}
-.muted{color:var(--mute)}
-table{width:100%;border-collapse:collapse;font-size:15px}
-td,th{padding:6px 4px;text-align:left;border-top:1px solid var(--line);font-weight:400}
-th{color:var(--mute);font-size:14px;border-top:0}
-td:nth-child(n+2),th:nth-child(n+2){text-align:right}
+.bar.wide{flex:1 0 100%;margin-top:0}
+
+/* dispense */
+.dispense{flex:1;min-height:0;display:flex;flex-direction:column}
+.presets{flex:1;min-height:0;display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:1fr 1fr .65fr;gap:.8rem}
+.pb{font-size:2.3rem;font-weight:700;border-radius:1.1rem}
+.pb.zero{font-weight:400;font-size:1.6rem}
+.pb.cu{grid-column:1/-1;font-size:1.5rem;background:transparent;color:var(--ink);border:2px dashed var(--mute)}
 
 /* buttons */
-button{font:inherit;font-weight:600;border:1px solid var(--btn);background:var(--btn);color:var(--btnink);padding:9px 16px;border-radius:10px;cursor:pointer}
+button{font:inherit;font-weight:600;border:1px solid var(--btn);background:var(--btn);color:var(--btnink);padding:.7rem 1.2rem;border-radius:.9rem;cursor:pointer;
+       touch-action:manipulation}
+button:active:not(:disabled){transform:scale(.97);filter:brightness(1.15)}
 button.alt{background:transparent;color:var(--ink);border-color:var(--line)}
-button:focus-visible,input:focus-visible,summary:focus-visible,a:focus-visible{outline:3px solid var(--w1);outline-offset:2px}
-button:disabled{opacity:.5;cursor:default}
-.btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
-input[type=number]{font:inherit;padding:9px 12px;border-radius:10px;border:1px solid var(--line);background:var(--paper);color:var(--ink);width:150px}
-a{color:var(--w2)}
-details summary{cursor:pointer;font-weight:600}
-.live{margin:10px 0 0;padding:8px 12px;border-radius:10px;background:var(--paper);font-size:15px}
+button.go{background:var(--green);border-color:var(--green);color:#fff}
+button.stop{background:var(--red);border-color:var(--red);color:#fff}
+button:disabled{opacity:.4;cursor:default}
+button:focus-visible{outline:3px solid var(--w1);outline-offset:2px}
+.ib:active{transform:scale(.95)}
+.btns{display:flex;gap:.8rem;flex-wrap:wrap;margin-top:1rem}
+.btns button{min-height:3.4rem;font-size:1.15rem}
+
+/* modals */
+.scrim{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(5,15,20,.6);z-index:20}
+.scrim.on{display:flex}
+.dlg{background:var(--card);border:1px solid var(--line);border-radius:1.3rem;padding:1.4rem 1.6rem;max-width:94vw;max-height:94vh;overflow:auto;
+     box-shadow:0 1rem 3rem rgba(0,0,0,.35)}
+.dlg h3{margin:0 0 .4rem;font-size:1.7rem}
+.dbig{font-size:4.2rem;font-weight:700;line-height:1.1;margin:.3rem 0}
+.sheet{width:min(64rem,96vw);height:min(42rem,94vh);display:flex;flex-direction:column;padding:0}
+.sheet>header{padding:.9rem 1.4rem;border-bottom:1px solid var(--line)}
+.sheet>header h3{margin:0;flex:1}
+.sbody{flex:1;overflow:auto;padding:1.2rem 1.4rem;-webkit-overflow-scrolling:touch}
+.sec{padding:0 0 1.2rem;margin:0 0 1.2rem;border-bottom:1px solid var(--line)}
+.sec:last-child{border:0;margin:0}
+.sec h2{margin-bottom:.8rem}
+.fld{display:flex;align-items:center;gap:1rem;justify-content:space-between}
+.val{min-width:12rem;background:var(--paper);color:var(--ink);border:1px solid var(--line);font-size:1.6rem;font-weight:700;text-align:right}
+.sgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:.8rem}
+.sp8{display:flex;flex-direction:column;align-items:flex-start;gap:.1rem;background:var(--paper);color:var(--ink);border:1px solid var(--line)}
+.sp8 span{font-size:.85rem;color:var(--mute);font-weight:500}
+.sp8 b{font-size:1.7rem}
+.live{margin:.8rem 0 0;padding:.6rem .9rem;border-radius:.7rem;background:var(--paper)}
 .live.good{border-left:4px solid var(--green)} .live.wait{border-left:4px solid var(--amber)}
-#toast{position:fixed;left:50%;bottom:18px;transform:translate(-50%,30px);opacity:0;transition:.3s;background:var(--ink);color:var(--paper);
-       padding:10px 16px;border-radius:10px;max-width:90vw;font-size:15px;pointer-events:none;z-index:9}
+table{width:100%;border-collapse:collapse;font-size:1.1rem}
+td,th{padding:.55rem .3rem;text-align:left;border-top:1px solid var(--line);font-weight:400}
+th{color:var(--mute);font-size:.95rem;border-top:0}
+td:nth-child(n+2),th:nth-child(n+2){text-align:right}
+a{color:var(--w2)}
+.muted{color:var(--mute)}
+
+/* keypad */
+.kp{width:23rem}
+.kpt{color:var(--mute);font-size:1rem;display:flex;justify-content:space-between}
+.kpv{font-size:3.2rem;font-weight:700;text-align:right;background:var(--paper);border:2px solid var(--line);border-radius:.9rem;padding:.4rem 1rem;margin:.5rem 0 .8rem}
+.kpv.bad{border-color:var(--red)}
+.pad{display:grid;grid-template-columns:repeat(3,1fr);gap:.6rem}
+.pad button{height:4.2rem;font-size:1.8rem}
+.pad .k-C{background:transparent;color:var(--ink);border-color:var(--line);font-size:1.2rem}
+.pad .k-OK{background:var(--green);border-color:var(--green);color:#fff}
+
+#toast{position:fixed;left:50%;bottom:1.2rem;transform:translate(-50%,2rem);opacity:0;transition:.3s;background:var(--ink);color:var(--paper);
+       padding:.7rem 1.1rem;border-radius:.8rem;max-width:90vw;font-size:1.05rem;pointer-events:none;z-index:40}
 #toast.on{opacity:1;transform:translate(-50%,0)} #toast.err{background:var(--red);color:#fff}
-@media (prefers-reduced-motion:reduce){#tank .wave,.chip.water i{animation:none}#water,.bar i{transition:none}}
+@media (prefers-reduced-motion:reduce){#tank .wave,.chip.water i,.dot.on{animation:none}#water,.bar i{transition:none}}
+
+/* narrow / portrait fallback */
+@media (max-aspect-ratio:1/1){
+  html{font-size:16px}
+  body{overflow:auto;height:auto;min-height:100dvh}
+  main{grid-template-columns:1fr;flex:none}
+  .tankwrap{height:55vh;flex:none}
+  .presets{grid-template-rows:none;grid-auto-rows:5rem}
+  .status{grid-template-columns:1fr}
+  .clock{display:none}
+}
 </style>
 </head>
 <body>
 <header>
   <h1>RO tank</h1>
   <span class="chip" id="chip"><i></i><span id="chipTxt">connecting</span></span>
-  <span class="sp"></span>
   <span class="sub" id="meta"></span>
+  <span class="sp"></span>
+  <div class="clock"><b id="clkT">--:--:--</b><span id="clkD"></span></div>
+  <button class="ib" onclick="openSheet('mHist')" aria-label="Recent pours">
+    <svg viewBox="0 0 24 24"><line x1="9" y1="6" x2="21" y2="6"/><line x1="9" y1="12" x2="21" y2="12"/><line x1="9" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg>
+    Pours</button>
+  <button class="ib" onclick="openSheet('mSet')" aria-label="Settings">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+  </button>
 </header>
 <div id="banner"></div>
 
 <main>
   <section class="card tankcard" aria-label="Tank level">
-    <svg id="tank" viewBox="0 0 220 300" role="img" aria-label="Tank level">
-      <defs>
-        <linearGradient id="wg" x1="0" y1="0" x2="0" y2="1">
-          <stop class="w1" offset="0" stop-color="var(--w1)"/><stop class="w2" offset="1" stop-color="var(--w2)"/>
-        </linearGradient>
-        <clipPath id="clip"><rect x="44" y="20" width="142" height="260" rx="11"/></clipPath>
-      </defs>
-      <rect class="body" x="42" y="18" width="146" height="264" rx="13"/>
-      <g clip-path="url(#clip)">
-        <g id="water" style="transform:translateY(270px)">
-          <g transform="translate(44,20)">
-            <path class="wave" fill="url(#wg)" d="M0 0 q16.75 -7 33.5 0 t33.5 0 t33.5 0 t33.5 0 t33.5 0 t33.5 0 t33.5 0 V300 H0 Z"/>
+    <div class="tankwrap">
+      <svg id="tank" viewBox="0 0 220 300" role="img" aria-label="Tank level">
+        <defs>
+          <linearGradient id="wg" x1="0" y1="0" x2="0" y2="1">
+            <stop class="w1" offset="0" stop-color="var(--w1)"/><stop class="w2" offset="1" stop-color="var(--w2)"/>
+          </linearGradient>
+          <clipPath id="clip"><rect x="44" y="20" width="142" height="260" rx="11"/></clipPath>
+        </defs>
+        <rect class="body" x="42" y="18" width="146" height="264" rx="13"/>
+        <g clip-path="url(#clip)">
+          <g id="water" style="transform:translateY(270px)">
+            <g transform="translate(44,20)">
+              <path class="wave" fill="url(#wg)" d="M0 0 q16.75 -7 33.5 0 t33.5 0 t33.5 0 t33.5 0 t33.5 0 t33.5 0 t33.5 0 V300 H0 Z"/>
+            </g>
           </g>
         </g>
-      </g>
-      <g>
-        <line class="tick" x1="30" x2="40" y1="85" y2="85"/><text class="tl" x="26" y="89">75</text>
-        <line class="tick" x1="30" x2="40" y1="150" y2="150"/><text class="tl" x="26" y="154">50</text>
-        <line class="tick" x1="30" x2="40" y1="215" y2="215"/><text class="tl" x="26" y="219">25</text>
-      </g>
-      <text id="pctText" x="115" y="165" class="lo">–</text>
-    </svg>
-    <div style="text-align:center">
-      <div class="mlbig"><span id="ml">–</span><small>ml left</small></div>
-      <div class="cap" id="capTxt"></div>
+        <g>
+          <line class="tick" x1="30" x2="40" y1="85" y2="85"/><text class="tl" x="26" y="89">75</text>
+          <line class="tick" x1="30" x2="40" y1="150" y2="150"/><text class="tl" x="26" y="154">50</text>
+          <line class="tick" x1="30" x2="40" y1="215" y2="215"/><text class="tl" x="26" y="219">25</text>
+        </g>
+        <text id="pctText" x="115" y="165" class="lo">–</text>
+      </svg>
+    </div>
+    <div class="mlrow"><span id="ml">–</span><small>ml left</small></div>
+    <div class="flows">
+      <div><span>Water in</span><b id="inR">–</b><small> ml/s</small></div>
+      <div><span>Water out</span><b id="outR">–</b><small> ml/s</small></div>
     </div>
   </section>
 
-  <div class="col">
-    <section class="card" id="pourCard" aria-live="polite">
-      <h2 id="pourH">Pour</h2>
-      <div id="pourBody"></div>
+  <div class="right">
+    <section class="card status" id="statusCard" aria-live="polite">
+      <div class="stL"><span class="dot" id="stDot"></span><span id="stWord">IDLE</span></div>
+      <div class="stB" id="stBody"></div>
     </section>
 
-    <div class="grid2">
-      <section class="card">
-        <h2>Water in</h2>
-        <div class="big"><span id="inR">–</span><small>ml/s</small></div>
-        <div class="sub" id="inSub"></div>
-      </section>
-      <section class="card">
-        <h2>Water out</h2>
-        <div class="big"><span id="outR">–</span><small>ml/s</small></div>
-        <div class="sub" id="outSub"></div>
-      </section>
-    </div>
-
-    <section class="card">
-      <h2>Refill</h2>
-      <div id="refillBody"></div>
-    </section>
-
-    <section class="card">
-      <h2>Recent pours</h2>
-      <div id="recent"></div>
-    </section>
-
-    <section class="card">
-      <h2>Calibration</h2>
-      <div id="wiz"></div>
-      <p class="sub" style="margin:14px 0 0">Data: <a href="/pours.csv">pours.csv</a> and <a href="/refill_log.csv">refill_log.csv</a></p>
+    <section class="card dispense">
+      <h2>Dispense</h2>
+      <div class="presets" id="presets"></div>
     </section>
   </div>
 </main>
+
+<!-- dispense dialog (driven by the Pico's state, survives reloads) -->
+<div class="scrim" id="mDisp"><div class="dlg" id="dBody" style="min-width:26rem;text-align:center"></div></div>
+
+<!-- keypad -->
+<div class="scrim" id="mKp" onclick="if(event.target===this)kpClose()">
+  <div class="dlg kp">
+    <div class="kpt"><span id="kpTitle"></span><span id="kpMax"></span></div>
+    <div class="kpv" id="kpVal">0</div>
+    <div class="pad" id="pad"></div>
+    <div class="btns" style="margin-top:.8rem"><button class="alt" style="flex:1" onclick="kpClose()">Cancel</button></div>
+  </div>
+</div>
+
+<!-- pours -->
+<div class="scrim" id="mHist" onclick="if(event.target===this)closeSheet('mHist')">
+  <div class="dlg sheet">
+    <header><h3>Recent pours</h3><button class="alt" onclick="closeSheet('mHist')">Close</button></header>
+    <div class="sbody"><div id="recent"></div></div>
+  </div>
+</div>
+
+<!-- settings -->
+<div class="scrim" id="mSet" onclick="if(event.target===this)closeSheet('mSet')">
+  <div class="dlg sheet">
+    <header><h3>Settings</h3><button class="alt" onclick="closeSheet('mSet')">Close</button></header>
+    <div class="sbody">
+      <div class="sec">
+        <h2>Tank</h2>
+        <div class="fld"><span>Total volume</span><button class="val" id="setCap" onclick="editCap()">–</button></div>
+      </div>
+      <div class="sec">
+        <h2>Dispense buttons <span class="muted" style="text-transform:none;letter-spacing:0">(0 = unused)</span></h2>
+        <div class="sgrid" id="sgrid"></div>
+      </div>
+      <div class="sec">
+        <h2>Calibration</h2>
+        <div id="wiz"></div>
+      </div>
+      <div class="sec">
+        <h2>Data</h2>
+        <a href="/pours.csv">pours.csv</a> &nbsp; <a href="/refill_log.csv">refill_log.csv</a>
+      </div>
+    </div>
+  </div>
+</div>
 <div id="toast" role="status"></div>
 
 <script>
 const $=id=>document.getElementById(id);
-let S=null, recvAt=0, timer=null, fails=0, wizKey='';
+let S=null, recvAt=0, timer=null, fails=0, wizKey='', dispKey='', gramsVal=0;
 
 const fmt=n=>Math.round(n).toLocaleString();
 function dur(s){s=Math.max(0,Math.round(s));const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60,p=v=>String(v).padStart(2,'0');
@@ -175,7 +276,15 @@ function ago(s){if(s<60)return Math.round(s)+' s ago';if(s<3600)return Math.roun
   const h=s/3600;return (h<10?h.toFixed(1):Math.round(h))+' h ago'}
 function clock(ts){return new Date(ts).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}
 
-/* ---------- polling ---------- */
+/* ---------- system clock ---------- */
+function tickClock(){
+  const d=new Date();
+  $('clkT').textContent=d.toLocaleTimeString([],{hour:'numeric',minute:'2-digit',second:'2-digit'});
+  $('clkD').textContent=d.toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'});
+}
+setInterval(tickClock,1000); tickClock();
+
+/* ---------- polling / requests ---------- */
 async function poll(){
   clearTimeout(timer);
   let delay=1000;
@@ -186,23 +295,100 @@ async function poll(){
     S=await r.json(); recvAt=performance.now(); fails=0;
     $('banner').style.display='none';
     render();
-    delay=(S.pour)?400:1000;
+    delay=(S.pour||S.disp)?400:1000;
   }catch(e){
     fails++;
-    if(fails>=2){$('banner').textContent='Can’t reach the Pico. Retrying…';$('banner').style.display='block';setChip('lost contact','bad')}
+    if(fails>=2){$('banner').textContent='Lost contact with the Pico. Retrying…';$('banner').style.display='block';setChip('lost contact','bad')}
     delay=2000;
   }
   timer=setTimeout(poll,delay);
 }
-async function act(a,extra){
+async function call(url,quiet){
   try{
-    const r=await fetch('/api/cal?action='+a+(extra||''),{method:'POST'});
-    const j=await r.json(); toast(j.msg,j.ok);
-  }catch(e){toast('Request failed. Is the Pico reachable?',false)}
+    const r=await fetch(url,{method:'POST'});
+    const j=await r.json(); if(!j.ok||!quiet)toast(j.msg,j.ok);
+  }catch(e){toast('Request failed',false)}
   poll();
 }
+const act=(a,x)=>call('/api/cal?action='+a+(x||''));
+const disp=(a,x)=>call('/api/dispense?action='+a+(x||''),true);
+const save=qs=>call('/api/settings?'+qs);
 let toastT;
-function toast(m,ok){const t=$('toast');t.textContent=m;t.className='on'+(ok?'':' err');clearTimeout(toastT);toastT=setTimeout(()=>t.className='',5000)}
+function toast(m,ok){const t=$('toast');t.textContent=m;t.className='on'+(ok?'':' err');clearTimeout(toastT);toastT=setTimeout(()=>t.className='',4000)}
+
+/* ---------- sheets ---------- */
+function openSheet(id){$(id).classList.add('on')}
+function closeSheet(id){$(id).classList.remove('on')}
+
+/* ---------- keypad ---------- */
+let kp=null;
+(function(){
+  const keys=['1','2','3','4','5','6','7','8','9','C','0','OK'], el=$('pad');
+  for(const k of keys){const b=document.createElement('button');b.className='k-'+k;b.textContent=k==='C'?'Clear':k;b.onclick=()=>kpKey(k);el.appendChild(b)}
+})();
+function openKeypad(o){
+  kp={title:o.title,max:o.max,min:o.min,unit:o.unit||'ml',val:o.init?String(o.init):'',fresh:!!o.init,onOk:o.onOk};
+  kpRender(); $('mKp').classList.add('on');
+}
+function kpClose(){kp=null;$('mKp').classList.remove('on')}
+function kpRender(){
+  const n=+kp.val||0;
+  $('kpTitle').textContent=kp.title; $('kpMax').textContent='max '+fmt(kp.max);
+  $('kpVal').innerHTML=fmt(n)+'<small>'+kp.unit+'</small>';
+  document.querySelector('#pad .k-OK').disabled=n<kp.min;
+}
+function kpKey(k){
+  if(!kp)return;
+  if(k==='C'){kp.val='';kp.fresh=false}
+  else if(k==='B'){kp.val=kp.val.slice(0,-1);kp.fresh=false}
+  else if(k==='OK'){const n=+kp.val||0;if(n<kp.min)return;const f=kp.onOk;kpClose();f(n);return}
+  else{
+    let v=(kp.fresh?'':kp.val)+k; kp.fresh=false; v=v.replace(/^0+(?=\d)/,'');
+    if(+v>kp.max){const e=$('kpVal');e.classList.add('bad');setTimeout(()=>e.classList.remove('bad'),350);return}
+    kp.val=v;
+  }
+  kpRender();
+}
+addEventListener('keydown',e=>{
+  if(!kp)return;
+  if(/^\d$/.test(e.key))kpKey(e.key);
+  else if(e.key==='Backspace')kpKey('B'); else if(e.key==='Delete')kpKey('C');
+  else if(e.key==='Enter')kpKey('OK'); else if(e.key==='Escape')kpClose(); else return;
+  e.preventDefault();
+});
+
+/* ---------- presets / settings fields ---------- */
+(function(){
+  const pr=$('presets'), sg=$('sgrid');
+  for(let i=0;i<8;i++){
+    const b=document.createElement('button');b.className='pb';b.id='pb'+i;
+    b.onclick=()=>{const v=S&&S.presets?S.presets[i]:0;if(v)disp('start','&ml='+v)};pr.appendChild(b);
+    const s=document.createElement('button');s.className='sp8';s.id='sp'+i;
+    s.innerHTML=`<span>Button ${i+1}</span><b></b>`;s.onclick=()=>editPreset(i);sg.appendChild(s);
+  }
+  const c=document.createElement('button');c.className='pb cu';c.id='customBtn';c.textContent='Custom amount';
+  c.onclick=()=>openKeypad({title:'Dispense amount',max:S.maxml||9000,min:1,onOk:n=>disp('start','&ml='+n)});
+  pr.appendChild(c);
+})();
+function editPreset(i){
+  if(!S)return;
+  openKeypad({title:'Button '+(i+1),max:S.maxml||9000,min:0,init:(S.presets||[])[i],onOk:n=>save('p'+i+'='+n)});
+}
+function editCap(){
+  if(!S||!S.cal)return toast('Calibrate first',false);
+  openKeypad({title:'Total tank volume',max:20000,min:1000,init:S.cap,onOk:n=>save('cap='+n)});
+}
+function renderPresets(){
+  const P=S.presets||[], ready=S.cal&&S.ml!==undefined&&S.ok&&!S.disp&&!S.pour;
+  for(let i=0;i<8;i++){
+    const v=P[i]||0, b=$('pb'+i);
+    b.innerHTML=v?fmt(v)+'<small>ml</small>':'–';
+    b.classList.toggle('zero',!v); b.disabled=!v||!ready;
+    $('sp'+i).querySelector('b').innerHTML=v?fmt(v)+'<small>ml</small>':'0';
+  }
+  $('customBtn').disabled=!ready;
+  $('setCap').textContent=S.cal&&S.cap?fmt(S.cap)+' ml':'–';
+}
 
 /* ---------- rendering ---------- */
 const STATES={uncal:['Needs calibration','warn'],fault:['No scale readings','bad'],pour:['Pouring','water'],
@@ -210,6 +396,7 @@ const STATES={uncal:['Needs calibration','warn'],fault:['No scale readings','bad
 function setChip(txt,cls){$('chip').className='chip '+cls;$('chipTxt').textContent=txt}
 
 function setTank(pct,hasData){
+  pct=Math.min(100,pct);                       /* over-range just reads 100 % */
   const p=hasData?Math.max(0,Math.min(1,pct/100)):0, H=260;
   let off=H*(1-p); if(p>=0.99)off=-8; else if(p<=0.002)off=270;
   $('water').style.transform=`translateY(${off}px)`;
@@ -224,67 +411,76 @@ function render(){
   setChip(st[0],st[1]);
   $('meta').textContent=(s.ip?s.ip+'  ':'')+'up '+dur(s.up);
   setTank(has?s.pct:0,has);
-  $('ml').textContent=has?fmt(s.ml):'–';
-  $('capTxt').textContent=has?`${s.pct.toFixed(1)}% of ${fmt(s.cap)} ml`:(s.cal?'':'Calibrate to see volume');
-  if(s.state==='fault'&&s.cal)$('banner').textContent='The HX711 isn’t sending readings. Check the wiring and power.',$('banner').style.display='block';
-  renderPour(); renderFlow(); renderRefill(); renderRecent(); renderWiz();
+  $('ml').textContent=has?fmt(Math.min(s.ml,s.cap)):'–';
+  $('inR').textContent=has?s.in.toFixed(2):'–';
+  $('outR').textContent=has?s.out.toFixed(2):'–';
+  if(s.state==='fault'&&s.cal){$('banner').textContent='No HX711 readings. Check wiring and power.';$('banner').style.display='block'}
+  renderStatus(); renderPresets(); renderDisp(); renderRecent(); renderWiz();
 }
 
-function renderPour(){
-  const s=S, c=$('pourCard');
-  if(!s.cal||s.ml===undefined){c.classList.remove('pouring');$('pourH').textContent='Pour';
-    $('pourBody').innerHTML='<p class="muted" style="margin:0">Pours appear here once the scale is calibrated.</p>';return}
-  if(s.pour){
-    c.classList.add('pouring'); $('pourH').textContent='Pouring now';
-    const left=s.pour.left, w=Math.min(100,left/10*100);
-    $('pourBody').innerHTML=
-     `<div class="big">${fmt(s.pour.ml)}<small>ml dispensed</small></div>
-      <div class="row"><span>Flow out</span><b>${s.out.toFixed(1)} ml/s</b></div>
-      <div class="row"><span>Time</span><b>${dur(s.pour.dur)}</b></div>
-      <div class="row"><span>Tank at start</span><b>${Math.round(s.pour.f0)}%</b></div>
-      <div class="sub" style="margin-top:8px">${left<9.9?`Pour ends in ${Math.ceil(left)} s unless water is drawn again`:'Water is flowing'}</div>
-      <div class="bar"><i style="width:${w}%"></i></div>`;
-  }else{
-    c.classList.remove('pouring'); $('pourH').textContent='Pour';
-    let h='<p style="margin:0 0 6px">No pour in progress. A pour ends after 10 seconds without water being drawn.</p>';
-    if(s.last){const L=s.last,a=(L[0]&&s.ep)?ago(s.ep-L[0]):'';
-      h+=`<div class="row"><span>Last pour</span><b>${fmt(L[1])} ml</b></div>
-          <div class="row"><span>Took</span><b>${dur(L[2])}${a?', '+a:''}</b></div>`}
-    $('pourBody').innerHTML=h;
+function kv(l,v,sub){return `<div class="kv"><span>${l}</span><b>${v}</b>${sub?`<em>${sub}</em>`:''}</div>`}
+function renderStatus(){
+  const s=S, D=s.disp, ready=s.cal&&s.ml!==undefined, active=!!(s.pour||D);
+  $('statusCard').classList.toggle('pouring',active);
+  $('stWord').textContent=active?'ACTIVE':'IDLE';
+  $('stDot').className='dot'+(active?' on':'');
+  let h='';
+  if(D){
+    const pc=D.target?Math.min(100,D.ml/D.target*100):0;
+    h=kv('Dispensing',`${fmt(D.ml)}<small>/ ${fmt(D.target)} ml</small>`)+kv('Flow',`${s.out.toFixed(1)}<small>ml/s</small>`)+
+      `<div class="bar wide"><i style="width:${pc}%"></i></div>`;
+  }else if(s.pour){
+    h=kv('Dispensed',`${fmt(s.pour.ml)}<small>ml</small>`)+kv('Flow',`${s.out.toFixed(1)}<small>ml/s</small>`)+kv('Time',dur(s.pour.dur));
+  }else if(ready){
+    if(s.state==='full')h=kv('Refill','Tank full');
+    else if(s.state==='stalled')h=kv('Refill','Not refilling');
+    else if(s.eta!==null&&s.eta!==undefined)h=kv('Full in','<span id="etaV">'+dur(s.eta)+'</span>','<span id="etaSub"></span>');
+    else h=kv('Refill','–');
+    if(s.last){const L=s.last,a=(L[0]&&s.ep)?ago(s.ep-L[0]):'';h+=kv('Last pour',`${fmt(L[1])}<small>ml</small>`,a)}
+    else h+=kv('Last pour','–');
   }
-}
-
-function renderFlow(){
-  const s=S;
-  if(!s.cal||s.ml===undefined){$('inR').textContent=$('outR').textContent='–';$('inSub').textContent=$('outSub').textContent='';return}
-  $('inR').textContent=s.in.toFixed(2); $('outR').textContent=s.out.toFixed(2);
-  let a;
-  if(s.in_src==='meas')a=`Measured over the last ${s.win} s`;
-  else a=s.curve_ok?'Estimated from the refill curve':'No refill curve yet, so this reads 0 while pouring';
-  $('inSub').textContent=a;
-  $('outSub').textContent=s.pour?`Scale loss plus the water arriving meanwhile`:(s.out>0.05?'Slow draw or leak':'Nothing drawn');
-}
-
-function renderRefill(){
-  const s=S,b=$('refillBody');
-  if(!s.cal||s.ml===undefined){b.innerHTML='<p class="muted" style="margin:0">–</p>';return}
-  if(s.state==='full'){b.innerHTML='<div class="big">Full</div><div class="sub">The tank is at '+s.pct.toFixed(1)+'%.</div>';return}
-  if(s.state==='pour'){b.innerHTML='<div class="big">–</div><div class="sub">The countdown resumes when the pour ends.</div>';return}
-  if(s.state==='stalled'){b.innerHTML='<div class="big">Stalled</div><div class="sub">No inflow detected. Check that the feed valve is open and the RO has pressure.</div>';return}
-  if(s.eta!==null&&s.eta!==undefined){
-    b.innerHTML=`<div class="big"><span id="etaV">${dur(s.eta)}</span><small>until full</small></div>
-      <div class="sub" id="etaSub"></div>
-      <div class="sub">Filling at ${s.in.toFixed(2)} ml/s${s.eta_src==='linear'?', rough guess without a refill curve':''}</div>`;
-    renderEtaTick();
-  }else b.innerHTML='<div class="big">–</div><div class="sub">Measuring the fill rate. This takes about 20 seconds after a pour.</div>';
+  $('stBody').innerHTML=h; renderEtaTick();
 }
 function renderEtaTick(){
   if(!S||S.eta===null||S.eta===undefined||!$('etaV'))return;
   const left=Math.max(0,S.eta-(performance.now()-recvAt)/1000);
   $('etaV').textContent=dur(left);
-  $('etaSub').textContent='Full around '+clock(Date.now()+left*1000);
+  $('etaSub').textContent=clock(Date.now()+left*1000);
 }
 setInterval(renderEtaTick,1000);
+
+/* ---------- dispense dialog ---------- */
+const WHY={stopped:'Stopped','no flow':'Stopped: no flow','tank empty':'Stopped: tank empty',
+  'sensor lost':'Stopped: scale readings lost',timeout:'Stopped: timed out',error:'Stopped: error'};
+function renderDisp(){
+  const D=S.disp, m=$('mDisp');
+  if(!D){m.classList.remove('on');dispKey='';return}
+  m.classList.add('on');
+  if(D.st!==dispKey){
+    dispKey=D.st; let h='';
+    if(D.st==='confirm1')
+      h=`<h3>Close the tap</h3><div class="dbig">${fmt(D.target)}<small>ml</small></div>
+         <div class="btns" style="justify-content:center"><button class="go" id="dConf" disabled onclick="disp('confirm1')">Tap is closed</button>
+         <button class="alt" onclick="disp('cancel')">Cancel</button></div>`;
+    else if(D.st==='run')
+      h=`<h3>Dispensing</h3><div class="dbig"><span id="dMl">0</span><small>/ ${fmt(D.target)} ml</small></div>
+         <div class="bar"><i id="dBar"></i></div>
+         <div class="btns" style="justify-content:center"><button class="stop" onclick="disp('stop')" style="min-width:12rem">Stop</button></div>`;
+    else
+      h=`<h3>Close the tap again</h3><div class="dbig"><span id="dMl">0</span><small>ml dispensed</small></div>
+         <div class="sub" id="dWhy" style="min-height:1.4em"></div>
+         <div class="btns" style="justify-content:center"><button class="go" id="dConf" disabled onclick="disp('confirm2')">Tap is closed</button></div>`;
+    $('dBody').innerHTML=h;
+    if($('dConf'))setTimeout(()=>{const c=$('dConf');if(c)c.disabled=false},900);   /* ignore stray double-taps */
+  }
+  if($('dMl'))$('dMl').textContent=fmt(D.ml);
+  if($('dBar'))$('dBar').style.width=Math.min(100,D.target?D.ml/D.target*100:0)+'%';
+  if($('dWhy')){
+    const w=WHY[D.why]||'';
+    $('dWhy').textContent=w||(D.set?`${D.ml-D.target>=0?'+':''}${D.ml-D.target} ml vs ${fmt(D.target)} ml target`:'');
+    $('dWhy').style.color=w?'var(--amber)':'';
+  }
+}
 
 function renderRecent(){
   const s=S, el=$('recent');
@@ -299,46 +495,42 @@ function renderRecent(){
 
 /* ---------- calibration wizard ---------- */
 const N=5;
-function stepHead(n,t){return `<p style="margin:0 0 4px"><b>Step ${n} of ${N}: ${t}</b></p>`}
+function stepHead(n,t){return `<p style="margin:0 0 .3rem"><b>Step ${n} of ${N}: ${t}</b></p>`}
+function pickGrams(){
+  openKeypad({title:'Drained water',max:20000,min:1,unit:'g',init:gramsVal,onOk:n=>{gramsVal=n;wizKey='';renderWiz()}});
+}
 function buildWiz(){
   const s=S, el=$('wiz'), st=s.step;
   const live='<div class="live wait" id="wLive"></div>';
   if(st==='idle'){
     el.innerHTML=s.cal
-      ?`<p style="margin:0 0 4px">Calibrated${s.cal_at?' on '+new Date(s.cal_at*1000).toLocaleDateString():''}. Capacity ${fmt(s.cap)} ml.
-        ${s.curve_ok?'The refill curve is learned.':'No refill curve yet, so pours are not corrected for the refill happening meanwhile.'}</p>
+      ?`<p style="margin:0">Calibrated${s.cal_at?' '+new Date(s.cal_at*1000).toLocaleDateString():''}, ${fmt(s.cap)} ml.
+        ${s.curve_ok?'Refill curve learned.':'No refill curve.'}</p>
         <div class="btns"><button class="alt" onclick="if(confirm('Start a new calibration? The current one stays active until you finish.'))act('start')">Recalibrate</button></div>`
-      :`<p style="margin:0 0 4px">The scale needs a one-time calibration. It takes a few hours, mostly waiting for the tank to refill, and you only need to be there for the first few minutes.</p>
-        <div class="btns"><button onclick="act('start')">Start calibration</button></div>`;
+      :`<p style="margin:0">Not calibrated.</p><div class="btns"><button onclick="act('start')">Start calibration</button></div>`;
   }else if(st==='full'){
-    el.innerHTML=stepHead(1,'Record the full weight')+
-     '<p style="margin:0">Make sure the tank is completely full and nothing is touching it. Wait until the reading is steady.</p>'+live+
+    el.innerHTML=stepHead(1,'Full weight')+'<p style="margin:0">Tank full, nothing touching it.</p>'+live+
      '<div class="btns"><button onclick="act(\'record_full\')">Record full weight</button><button class="alt" onclick="act(\'cancel\')">Cancel</button></div>';
   }else if(st==='close'){
-    el.innerHTML=stepHead(2,'Close the inlet valve')+
-     '<p style="margin:0">Close the valve that feeds RO water into the tank, so nothing refills it while you drain it.</p>'+
-     '<div class="btns"><button onclick="act(\'valve_closed\')">The valve is closed</button><button class="alt" onclick="act(\'cancel\')">Cancel</button></div>';
+    el.innerHTML=stepHead(2,'Inlet valve')+'<p style="margin:0">Close the inlet valve.</p>'+
+     '<div class="btns"><button onclick="act(\'valve_closed\')">Valve closed</button><button class="alt" onclick="act(\'cancel\')">Cancel</button></div>';
   }else if(st==='drain'){
-    el.innerHTML=stepHead(3,'Drain the whole tank')+
-     '<p style="margin:0">Collect everything that comes out in a container you can weigh. Keep the faucet open until it stops, including the last drips. Then record the empty weight.</p>'+live+
-     '<div class="btns"><button onclick="act(\'record_empty\')">The tank is empty, record it</button><button class="alt" onclick="act(\'cancel\')">Cancel</button></div>';
+    el.innerHTML=stepHead(3,'Drain')+'<p style="margin:0">Drain the tank into a container you can weigh, then record the empty weight.</p>'+live+
+     '<div class="btns"><button onclick="act(\'record_empty\')">Record empty weight</button><button class="alt" onclick="act(\'cancel\')">Cancel</button></div>';
   }else if(st==='grams'){
-    el.innerHTML=stepHead(4,'Enter the collected water')+
-     '<p style="margin:0 0 10px">Weigh the water you drained, in grams. This sets the scale factor and the tank capacity.</p>'+
-     '<input type="number" id="grams" inputmode="decimal" min="500" step="1" placeholder="grams"> '+
-     '<div class="btns"><button onclick="act(\'grams\',\'&g=\'+encodeURIComponent($(\'grams\').value))">Save weight</button><button class="alt" onclick="act(\'cancel\')">Cancel</button></div>';
+    el.innerHTML=stepHead(4,'Drained water')+'<p style="margin:0">Weight of the water you drained.</p>'+
+     '<div class="btns"><button class="alt val" style="min-width:12rem" onclick="pickGrams()">'+(gramsVal?fmt(gramsVal)+' g':'Enter grams')+'</button>'+
+     '<button '+(gramsVal?'':'disabled ')+'onclick="act(\'grams\',\'&g=\'+gramsVal)">Save</button><button class="alt" onclick="act(\'cancel\')">Cancel</button></div>';
   }else if(st==='open'){
-    el.innerHTML=stepHead(5,'Refill and log the fill rate')+
-     '<p style="margin:0">The scale is calibrated and already shows volume. Now open the inlet valve so the tank refills, then start logging. Don’t use the faucet during the refill.</p>'+
-     '<div class="btns"><button onclick="act(\'start_refill\')">The valve is open, start logging</button><button class="alt" onclick="act(\'skip\')">Skip this</button></div>';
+    el.innerHTML=stepHead(5,'Refill log')+'<p style="margin:0">Open the inlet valve, then start logging.</p>'+
+     '<div class="btns"><button onclick="act(\'start_refill\')">Start logging</button><button class="alt" onclick="act(\'skip\')">Skip</button></div>';
   }else if(st==='refill'){
-    el.innerHTML=stepHead(5,'Logging the refill')+
-     '<p style="margin:0">Keep the faucet closed. The last liter fills very slowly, so this can take hours. It saves itself once the fill rate stops, or you can save early.</p>'+live+
-     '<div class="btns"><button onclick="act(\'finish\')">Finish and save curve</button><button class="alt" onclick="act(\'finish\',\'&force=1\')">Save what I have</button><button class="alt" onclick="act(\'skip\')">Stop logging</button></div>';
+    el.innerHTML=stepHead(5,'Logging refill')+'<p style="margin:0">Keep the tap closed. Saves itself once the fill rate stops.</p>'+live+
+     '<div class="btns"><button onclick="act(\'finish\')">Finish and save</button><button class="alt" onclick="act(\'finish\',\'&force=1\')">Save what I have</button><button class="alt" onclick="act(\'skip\')">Stop logging</button></div>';
   }
 }
 function renderWiz(){
-  const key=S.step+'|'+S.cal+'|'+S.curve_ok;
+  const key=S.step+'|'+S.cal+'|'+S.curve_ok+'|'+gramsVal;
   if(key!==wizKey){wizKey=key;buildWiz()}
   const L=$('wLive'); if(!L)return;
   const s=S;
@@ -346,11 +538,11 @@ function renderWiz(){
     const b=s.stab||{};
     L.className='live '+(b.ok?'good':'wait');
     L.textContent=b.n<30?'Collecting readings…':
-      (b.ok?'Steady. ':'Still settling. ')+`Reading ${fmt(b.mean)} counts, noise ±${fmt(b.std)}, drift ${fmt(b.drift)}.`;
+      (b.ok?'Steady. ':'Settling. ')+`${fmt(b.mean)} counts, noise ±${fmt(b.std)}, drift ${fmt(b.drift)}.`;
   }else if(s.step==='refill'){
     const n=(s.wip&&s.wip.log_n)||0;
     L.className='live good';
-    L.textContent=`Tank ${s.pct!==undefined?s.pct.toFixed(1):'–'}% full, filling at ${s.in!==undefined?s.in.toFixed(2):'–'} ml/s. ${n} samples logged.`;
+    L.textContent=`${s.pct!==undefined?s.pct.toFixed(1):'–'}%, filling ${s.in!==undefined?s.in.toFixed(2):'–'} ml/s, ${n} samples logged.`;
   }
 }
 
