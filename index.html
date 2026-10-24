@@ -103,6 +103,8 @@ button:focus-visible{outline:3px solid var(--w1);outline-offset:2px}
 /* modals */
 .scrim{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(5,15,20,.6);z-index:20}
 .scrim.on{display:flex}
+#mDisp{z-index:30}   /* dispense prompts sit above sheets */
+#mKp{z-index:35}     /* keypad is always the front-most dialog */
 .dlg{background:var(--card);border:1px solid var(--line);border-radius:1.3rem;padding:1.4rem 1.6rem;max-width:94vw;max-height:94vh;overflow:auto;
      box-shadow:0 1rem 3rem rgba(0,0,0,.35)}
 .dlg h3{margin:0 0 .4rem;font-size:1.7rem}
