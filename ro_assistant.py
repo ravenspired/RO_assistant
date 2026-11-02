@@ -10,11 +10,17 @@ Files the Pico creates:
     cal_wip.json     calibration wizard progress (survives power cycles)
     refill_log.csv   fill rate vs fullness, logged during calibration
     pours.csv        history of every pour
+<<<<<<< Updated upstream
     settings.json    dispense presets and the valve close lead (+ auto-tune flag)
+=======
+    settings.json    dispense presets, the learned valve lag, the full-tank correction
+>>>>>>> Stashed changes
     stats.json       hourly + daily water-use totals for the Stats page
+    drain.json       learned drain rate vs fullness (drives the dispense countdown)
+    snaps.csv        log of every full-tank reset (how far the reading had drifted)
 
 Wiring is the same as your test script: DT -> GP14, SCK -> GP15.
-Dispense solenoid valve: GP16 (normally open; closed only during a dispense, see VALVE_* below).
+Dispense solenoid valve: GP16 (normally open; closed only at the end of a dispense, see VALVE_* below).
 """
 import gc
 import json
@@ -51,6 +57,17 @@ SLOPE_START = 2.0          # g/s the weight must actually be dropping to start a
 PRE_ROLL_MS = 3000         # back-date a pour start to catch the first second of flow
 SETTLE_MS = 3000           # keep counting this long after the last draw (scale settling)
 MIN_POUR_ML = 15           # ignore "pours" smaller than this (bumps, noise)
+ONSET_G = 3.0              # grams the weight must fall below its resting value to mark the start of a draw
+POUR_MAX_MS = 1200000      # safety: a manual pour can't stay "active" longer than this
+
+# ---- full-tank reset (thermal drift of the scale reading) ----
+SNAP_ENABLE = True
+SNAP_MIN_FRAC = 0.85       # the reading must be at least this full to count as "stuck near full"
+SNAP_MAX_FRAC = 1.25       # ...and no more than this (further off than that means something else is wrong)
+SNAP_HOLD_S = 1800         # no pour and no real rise for this long -> the tank is full: reset to 100 %
+SNAP_RISE_ML = 40          # a rise bigger than this above the lowest point is real refilling: restart the timer
+SNAP_MIN_ML = 30           # corrections smaller than this are ignored (noise), so a healthy full tank stays quiet
+STALE_S = 90               # quiet this long with no fill-rate measurement -> re-sync the estimators
 
 CAP_MS = 8000              # window used when recording full/empty weights
 DRIFT_MAX = 6000           # max counts of drift allowed while recording a weight
@@ -73,7 +90,10 @@ DISP_STALL_MS = 15000      # valve open this long without ~5 ml of progress -> c
 DISP_STALL_ML = 5
 DISP_MAX_MS = 900000       # hard cap on one dispense
 DISP_SETTLE_MS = 2500      # keep measuring this long after the valve closes
-DISP_CONFIRM_MS = 120000   # unconfirmed "open the tap" request cancels itself (water restored)
+DISP_ARM_MS = 120000       # "start pouring" with no flow for this long cancels itself
+DISP_LEARN_MS = 1500       # ignore the first part of a run (flow still ramping up) for timing and learning
+DISP_FALSE_ML = 10         # a run that has moved less than this after 3 s was a false trigger
+OUT_BINS = 20              # resolution of the drain-rate-vs-fullness curve (5 % steps)
 
 # ---- usage statistics ----
 STATS_UTC_OFFSET_H = -6    # where "midnight" falls for the daily totals (-6 = US Central standard time)
@@ -88,6 +108,8 @@ LOG_FILE = "refill_log.csv"
 POURS_FILE = "pours.csv"
 SETTINGS_FILE = "settings.json"
 STATS_FILE = "stats.json"
+DRAIN_FILE = "drain.json"
+SNAP_FILE = "snaps.csv"
 EPOCH_OFFSET = 946684800   # MicroPython epoch is 2000-01-01
 
 ntp_ok = False
@@ -358,6 +380,20 @@ class Tank:
         self.stats_h = {}            # hour index -> [ml, pours]
         self.stats_d = {}            # day index  -> [ml, pours]
         self.stats_dirty = False
+        self.off = 0.0               # grams added to every reading by full-tank resets
+        self.off_dirty = False
+        self.off_saved_t = -10 ** 9
+        self.plat_t0 = None          # start of the current "stuck near full" window
+        self.plat_min = 0.0
+        self.full_latch = False      # set by a full-tank reset, cleared by the next draw
+        self.meas_t = 0              # last time a fill-rate measurement existed (or a pour was running)
+        self.resyncs = 0
+        self.ev = {"n": 0, "k": "", "ml": 0}   # last notable event, for a dashboard toast
+        self.rep_id = 0
+        self.last_rep = None         # report for the most recent finished pour (manual or auto)
+        self.out_m = [0.0] * OUT_BINS  # learned drain rate (ml/s) per fullness bin
+        self.out_n = [0] * OUT_BINS    # how many pours have contributed to each bin
+        self.out_curve = None          # out_m with the gaps interpolated
 
     # ---------- persistence ----------
     def load(self):
@@ -372,11 +408,29 @@ class Tank:
                 if isinstance(p, list) and len(p) == 8:
                     self.settings["presets"] = [int(clamp(int(x), 0, DISP_MAX_ML)) for x in p]
                 if "lag" in st:
+<<<<<<< Updated upstream
                     self.settings["lag"] = clamp(float(st["lag"]), 0.0, VALVE_LAG_MAX)
                 if "learn" in st:
                     self.settings["learn"] = bool(st["learn"])
+=======
+                    self.settings["lag"] = clamp(float(st["lag"]), 0.0, 1.5)
+                if "off" in st:
+                    self.off = clamp(float(st["off"]), -5000.0, 5000.0)
+>>>>>>> Stashed changes
             except Exception as e:
                 print("settings load:", e)
+        dr = load_json(DRAIN_FILE, None)
+        if isinstance(dr, dict):
+            try:
+                m = dr.get("m")
+                n = dr.get("n")
+                if isinstance(m, list) and isinstance(n, list) and len(m) == OUT_BINS and len(n) == OUT_BINS:
+                    self.out_m = [float(x) for x in m]
+                    self.out_n = [int(x) for x in n]
+            except Exception as e:
+                print("drain load:", e)
+        self._out_rebuild()
+        self.meas_t = mono()
         self._stats_load()
         if self.wip.get("step") == "refill":
             self.log_n = max(0, self._count_lines(LOG_FILE) - 1)
@@ -545,6 +599,17 @@ class Tank:
         self.corr = 1.0
         self.out_ema = 0.0
         self.eta_s = None
+        self.off = 0.0               # a fresh calibration starts with no drift correction
+        self.off_dirty = True
+        self.plat_t0 = None
+        self.full_latch = False
+        self.meas_t = mono()
+
+    def _save_settings(self):
+        self.settings["off"] = round(self.off, 1)
+        self.off_dirty = False
+        self.off_saved_t = mono()
+        save_json(SETTINGS_FILE, self.settings)
 
     # ---------- sensor input (10 Hz) ----------
     def on_sample(self, raw):
@@ -560,7 +625,7 @@ class Tank:
         self.med = med
         if not self.cal:
             return
-        g = (med - self.cal["empty"]) * self.cal["scale"]
+        g = (med - self.cal["empty"]) * self.cal["scale"] + self.off
         self.g = g
         self.gbuf.add(t, g)
         if self.disp is not None:
@@ -603,6 +668,9 @@ class Tank:
         vals = self.gbuf.v[-8:]
         ws = sum(vals) / len(vals)
         p["ml"] = max(0.0, p["w0"] - ws + p["in_int"])
+        if p["ml"] > p["mx"] + 2.5:          # volume still climbing: remember when it last did
+            p["mx"] = p["ml"]
+            p["t_rise"] = t
         if out_inst > OUT_KEEP:
             p["last_draw"] = t
             self.last_draw_t = t
@@ -612,7 +680,7 @@ class Tank:
             p["f_end"] = ws / cap
             if self.out_ema > p["peak"]:
                 p["peak"] = self.out_ema
-        if idle > POUR_END_MS:
+        if idle > POUR_END_MS or t - p["t0"] > POUR_MAX_MS:
             self._end_pour(t)
 
     def _start_pour(self, t, in_est):
@@ -624,24 +692,49 @@ class Tank:
             i += 1
         seg = gb.v[i:i + 3]
         w0 = sum(seg) / len(seg)
-        t0 = gb.t[i]
+        t0 = self._onset(i, w0)
         self.pour = {
             "t0": t0, "w0": w0, "in_int": in_est * (t - t0) / 1000.0,
             "last_draw": t, "ml": 0.0, "snap": 0.0, "peak": 0.0,
-            "f0": w0 / cap, "f_end": w0 / cap,
+            "f0": w0 / cap, "f_end": w0 / cap, "mx": 0.0, "t_rise": t0,
         }
         self.draw_cnt = 0
+        self.full_latch = False
+
+    def _onset(self, i, w_ref):
+        """Time the weight first fell clearly below its resting value: the real start of the draw
+        (the pre-roll window starts earlier than that, which would inflate pour times)."""
+        gb = self.gbuf
+        n = len(gb.t)
+        j = i + 3
+        while j < n and gb.v[j] > w_ref - ONSET_G:
+            j += 1
+        if j >= n or j <= i + 3:
+            return gb.t[i]
+        return gb.t[j - 1]
+
+    def _report(self, rep):
+        self.rep_id += 1
+        rep["id"] = self.rep_id
+        rep["ep"] = epoch()
+        self.last_rep = rep
+        return rep
 
     def _end_pour(self, t):
         p = self.pour
         self.pour = None
         self.draw_cnt = 0
         ml = p["snap"]
-        dur = (p["last_draw"] - p["t0"]) / 1000.0
+        # flow time = onset to the moment the volume stopped rising (minus the ~0.35 s the 8-sample
+        # smoothing delays it). "last_draw" lags the real stop by over a second, which skewed the average.
+        dur = max(0.0, (p["t_rise"] - p["t0"]) / 1000.0 - 0.35)
         if ml < MIN_POUR_ML:
             return
         rec = [epoch(), int(round(ml)), round(dur, 1), round(p["f0"] * 100, 1), round(p["f_end"] * 100, 1)]
         self._log_pour(rec)
+        self._report({"kind": "manual", "ml": rec[1], "dur": rec[2],
+                      "avg": round(ml / dur, 1) if dur > 0.5 else None,
+                      "peak": round(p["peak"], 1), "f0": rec[3], "f_end": rec[4]})
 
     def _log_pour(self, rec):
         self.pours.append(rec)
@@ -666,18 +759,27 @@ class Tank:
         self.sensor_ok = self.last_sample_t is not None and (t - self.last_sample_t) < 3000
         d = self.disp
         if d is not None:
-            if d["st"] == "run" and (self.last_sample_t is None or t - self.last_sample_t > 1500):
+            st = d["st"]
+            if st == "run" and (self.last_sample_t is None or t - self.last_sample_t > 1500):
                 self._disp_close(t, "sensor lost")
-            elif d["st"] == "confirm1" and t - d["tq"] > DISP_CONFIRM_MS:
+            elif st == "armed" and t - d["tq"] > DISP_ARM_MS:
                 self._disp_end()
+            elif st == "settle" and t - d["tc"] > DISP_SETTLE_MS + 2000:
+                self._disp_settle(False)    # no samples arrived to finish it, so finish it here
         if self.stats_dirty and self.disp is None:
             self._stats_save()
+        if self.off_dirty and self.disp is None and t - self.off_saved_t > 600000:
+            try:
+                self._save_settings()
+            except Exception as e:
+                print("settings save:", e)
         if not self.cal or not self.sensor_ok or len(self.gbuf.v) < 5:
             return
         vals = [v for tt, v in zip(self.gbuf.t, self.gbuf.v) if tt >= t - 1000]
         if not vals:
             return
         g1 = sum(vals) / len(vals)
+        g1 = self._plateau(t, g1)            # full-tank reset: may shift the reading to exactly 100 %
         self.hist.add(t, g1)
         cap = self.cal["cap"]
         f = clamp(g1 / cap, 0.0, 1.2)
@@ -700,20 +802,33 @@ class Tank:
         self.in_meas = meas
         self.meas_win = win
 
-        # keep the live-supply correction up to date
+        # watchdog: if we have been quiet for a while and STILL have no fill-rate measurement, the
+        # estimators are stuck on old data. Throw them away and start clean.
+        busy = self.pour is not None or (self.disp is not None and self.disp["st"] != "armed")
+        if meas is not None or busy:
+            self.meas_t = t
+        elif t - self.meas_t > STALE_S * 1000:
+            self.resync("stale")
+            return
+
+        # keep the live-supply correction up to date. Only learn where the curve is steep enough for a
+        # measurement to mean something: near full the real rate is ~0.1 ml/s, the same size as thermal
+        # drift, and learning from it used to drag the correction towards zero.
         cur = self.cal.get("curve")
-        if meas is not None and cur and f < 0.97:
+        if meas is not None and cur and f < 0.9:
             cr = curve_at(cur, f)
-            if cr > 0.03:
+            if cr > 0.3:
                 target = clamp(meas / cr, 0.0, 5.0)
                 self.corr += 0.15 * (target - self.corr)
 
         in_rate, _ = self.in_display(f)
-        if self.pour is not None or self.disp is not None:
+        if f < SNAP_MIN_FRAC:
+            self.full_latch = False
+        if busy:
             self.state = "pour"
-        elif f >= FULL_FRAC:
+        elif f >= FULL_FRAC or self.full_latch:
             self.state = "full"
-        elif in_rate > 0.03:
+        elif in_rate > (0.03 if self.state == "refill" else 0.06):   # hysteresis: drift can't flap it
             self.state = "refill"
         elif meas is not None:
             self.state = "stalled"
@@ -729,17 +844,97 @@ class Tank:
                 df = (FULL_FRAC - f) / steps
                 tot = 0.0
                 for k in range(steps):
-                    r = max(curve_at(cur, f + (k + 0.5) * df) * self.corr, 0.01)
+                    r = max(curve_at(cur, f + (k + 0.5) * df) * self.corr, 0.02)
                     tot += df * cap / r
                 self.eta_s = tot
                 self.eta_src = "curve"
             elif in_rate > 0.03:
                 self.eta_s = (FULL_FRAC - f) * cap / in_rate
                 self.eta_src = "linear"
+            if self.eta_s is not None and (self.eta_s < 0 or self.eta_s > 172800):
+                self.eta_s = None            # more than two days is not a countdown, it's a shrug
+                self.eta_src = ""
 
         # calibration refill logging
         if self.wip.get("step") == "refill":
             self._refill_logging(t, f, g1, meas, since)
+
+    # ---------- full-tank reset and re-sync ----------
+    def _plateau(self, t, g1):
+        """Thermal drift makes a full tank read anywhere from ~90 % to ~110 %. A tank that sits near
+        full with no pour and no real rise for SNAP_HOLD_S is full: shift the reading to exactly 100 %.
+        A rise bigger than SNAP_RISE_ML above the lowest point is real refilling and restarts the timer,
+        so a tank that is genuinely still filling is never reset. Returns the (possibly corrected) g1."""
+        cap = self.cal["cap"]
+        f = g1 / cap
+        quiet = (SNAP_ENABLE and self.pour is None and self.disp is None
+                 and self.wip.get("step", "idle") == "idle" and SNAP_MIN_FRAC <= f <= SNAP_MAX_FRAC)
+        if (quiet and self.plat_t0 is not None and self.last_draw_t is not None
+                and self.last_draw_t >= self.plat_t0):
+            quiet = False                    # something was drawn since the window started
+        if not quiet:
+            self.plat_t0 = None
+            return g1
+        if self.plat_t0 is None or g1 - self.plat_min > SNAP_RISE_ML:
+            self.plat_t0 = t
+            self.plat_min = g1
+            return g1
+        if g1 < self.plat_min:
+            self.plat_min = g1
+        if t - self.plat_t0 >= SNAP_HOLD_S * 1000:
+            return self._snap_full(t, g1, "stuck")
+        return g1
+
+    def _snap_full(self, t, g_now, why):
+        cap = self.cal["cap"]
+        delta = cap - g_now
+        if abs(delta) < SNAP_MIN_ML and why != "manual":
+            self.plat_t0 = None              # already reads full to within noise: nothing to fix
+            self.full_latch = True
+            return g_now
+        self.off += delta
+        gb = self.gbuf.v
+        for i in range(len(gb)):
+            gb[i] += delta                   # keep the short buffer continuous so no phantom pour appears
+        if self.g is not None:
+            self.g += delta
+        self.plat_t0 = None
+        self.full_latch = True
+        self.off_dirty = True
+        self.resync("full:" + why)
+        self._event("full", delta)
+        try:
+            new = (not exists(SNAP_FILE)) or os.stat(SNAP_FILE)[6] > 20000
+            with open(SNAP_FILE, "w" if new else "a") as fh:
+                if new:
+                    fh.write("epoch,correction_ml,reading_pct,why\n")
+                fh.write("%d,%d,%.1f,%s\n" % (epoch(), int(delta), g_now / cap * 100.0, why))
+        except Exception as e:
+            print("snap log:", e)
+        return cap
+
+    def _event(self, kind, ml):
+        self.ev = {"n": self.ev["n"] + 1, "k": kind, "ml": int(round(ml))}
+
+    def resync(self, why):
+        """Throw away everything the estimators learned from the recent past, so the status, fill rate
+        and countdown start from a clean slate. Never touches the valve or a dispense in progress."""
+        self.hist = Buf(905000)
+        self.in_meas = None
+        self.meas_win = 0
+        self.corr = 1.0
+        self.out_ema = 0.0
+        self.slope2 = 0.0
+        self.draw_cnt = 0
+        self.prev_t = None
+        self.last_draw_t = None
+        self.eta_s = None
+        self.eta_src = ""
+        self.meas_t = mono()
+        self.resyncs += 1
+        print("resync:", why)
+        if not why.startswith("full"):
+            self._event("resync", 0)
 
     def in_display(self, f):
         if self.in_meas is not None and self.pour is None:
@@ -871,11 +1066,13 @@ class Tank:
 
     # ---------- dispenser ----------
     # The valve is normally open: at idle (coil off) the sink works like any sink.
-    # Flow: start (valve closes) -> confirm1 (user OPENS the tap; nothing flows yet)
-    #       -> run (valve opens, metered by the scale, closes at the target)
-    #       -> confirm2 (valve shut, user CLOSES the tap) -> idle (valve back to open).
-    # The valve only opens after confirm1, and normal water is only restored after the dispense
-    # is confirmed finished (or cancelled), so nothing else can start until then.
+    # Flow: start    the user picks an amount; the valve stays OPEN and the screen says "start pouring"
+    #       armed    waiting for the scale to see the tap open (same draw detector the manual pours use)
+    #       run      the scale meters the pour; the valve closes by itself at the target
+    #       settle   valve closed, a couple more seconds of measuring
+    #       report   the valve stays CLOSED while the report is up, so the container can't over-fill
+    #       done     the user has moved the tap over the sink and shut it; closing the report reopens the
+    #                valve and normal water is back.
     def _disp_end(self):
         """Leave dispense mode: de-energize the solenoid so the sink works normally again."""
         valve_set(True)
@@ -890,7 +1087,7 @@ class Tank:
         d = self.disp
         if d is None or d["st"] != "run":
             return
-        d["st"] = "confirm2"
+        d["st"] = "settle"
         d["why"] = why
         d["tc"] = t
         d["rate_close"] = d["rate"]
@@ -905,12 +1102,64 @@ class Tank:
         except Exception as e:
             print("emergency:", e)
 
+    def _live(self, d, t):
+        """The measured drain rate, once the flow has had time to ramp up and settle."""
+        if t - d["t0"] > DISP_LEARN_MS and d["rate"] > 3.0:
+            return d["rate"]
+        return None
+
+    def _disp_eta(self, d, g, live):
+        """Seconds until the valve will be told to close. g = tank level now (ml), live = measured drain
+        rate or None. Walks down the learned drain curve (rate falls as the tank empties), scaled to
+        how hard the tap is actually open, and allows for the tank refilling while it pours."""
+        cap = self.cal["cap"]
+        lag = self.settings["lag"]
+        cur = self.out_curve
+        if not cur:
+            if live is None:
+                return None
+            return max(0.0, (d["target"] - d["ml"] - live * lag) / live)
+        f_now = clamp(g / cap, 0.0, 1.0)
+        r_now = curve_at(cur, f_now)
+        scale = 1.0
+        if live is not None and r_now > 1.0:
+            scale = clamp(live / r_now, 0.4, 2.5)
+        remain = d["target"] - d["ml"] - r_now * scale * lag
+        if remain <= 0:
+            return 0.0
+        steps = 12
+        dml = remain / steps
+        inflow = self.inflow_est(f_now)
+        lvl = g
+        tot = 0.0
+        for _ in range(steps):
+            r = max(curve_at(cur, clamp((lvl - dml * 0.5) / cap, 0.0, 1.0)) * scale, 2.0)
+            dt = dml / r
+            tot += dt
+            lvl = max(0.0, lvl - dml + inflow * dt)
+        return tot
+
     def _disp_sample(self, t, g):
         d = self.disp
         st = d["st"]
-        if st == "confirm1" or (st == "confirm2" and d["settled"]):
+        if st == "report":
             return
         cap = self.cal["cap"]
+        if st == "armed":
+            self._pour_logic(t, g)           # the same draw detector the manual pours use
+            p = self.pour
+            if p is None:
+                return
+            # the tap just opened: take the pour over from the detector
+            self.pour = None
+            self.draw_cnt = 0
+            self.full_latch = False
+            d.update({"st": "run", "w0": p["w0"], "f0": p["f0"], "f_end": p["f0"], "in_int": p["in_int"],
+                      "ml": 0.0, "rate": 0.0, "prev": t, "t0": p["t0"], "pt": t, "pml": 0.0,
+                      "settled": False, "why": ""})
+            d.pop("p50", None)
+            d["eta0"] = self._disp_eta(d, p["w0"], None)     # the initial estimate, before any live flow data
+            st = "run"
         dt = (t - d["prev"]) / 1000.0
         d["prev"] = t
         if dt <= 0 or dt > 1.0:
@@ -930,34 +1179,62 @@ class Tank:
         self.last_draw_t = t        # keeps the inflow estimator and pour detector out of the way
         self.out_ema = d["rate"]
         if st == "run":
+            el = t - d["t0"]
             if ml - d["pml"] >= DISP_STALL_ML:
                 d["pml"] = ml
                 d["pt"] = t
+            if "p50" not in d and ml >= 0.5 * d["target"]:
+                e = self._disp_eta(d, ws, self._live(d, t))      # the estimate at the halfway mark
+                d["p50"] = [round(el / 1000.0, 2), None if e is None else round(e, 2)]
+            if el > DISP_LEARN_MS and d["rate"] > 3.0:           # time-weighted drain rate per fullness bin
+                b = int(clamp(ws / cap * OUT_BINS, 0, OUT_BINS - 1))
+                d["bs"][b] += d["rate"] * dt
+                d["bt"][b] += dt
             if ml + d["rate"] * self.settings["lag"] >= d["target"]:
                 self._disp_close(t, "done")
             elif ws < 20:
                 self._disp_close(t, "tank empty")
             elif t - d["pt"] > DISP_STALL_MS:
                 self._disp_close(t, "no flow")
-            elif t - d["t0"] > DISP_MAX_MS:
+            elif el > DISP_MAX_MS:
                 self._disp_close(t, "timeout")
+            elif el > 3000 and ml < DISP_FALSE_ML:
+                d["st"] = "armed"            # false trigger (a bump on the tank): go back to waiting
+                d["tq"] = t
+                d["ml"] = 0.0
+                d["rate"] = 0.0
+                self.out_ema = 0.0
+                self.prev_t = None
+                self.draw_cnt = 0
         elif t - d["tc"] >= DISP_SETTLE_MS:
             self._disp_settle(True)
 
     def _disp_settle(self, learn):
         d = self.disp
         d["settled"] = True
+        d["st"] = "report"
         ml = d["ml"]
+<<<<<<< Updated upstream
         if learn and self.settings.get("learn", True) and d["why"] == "done" and d["rate_close"] > 5.0:
             lag = self.settings["lag"] + 0.6 * (ml - d["target"]) / d["rate_close"]
             self.settings["lag"] = round(clamp(lag, 0.0, VALVE_LAG_MAX), 3)
+=======
+        lag0 = self.settings["lag"]
+        if learn and d["why"] == "done" and d["rate_close"] > 5.0:
+            lag = lag0 + 0.6 * (ml - d["target"]) / d["rate_close"]
+            self.settings["lag"] = round(clamp(lag, 0.0, 1.5), 3)
+>>>>>>> Stashed changes
             try:
-                save_json(SETTINGS_FILE, self.settings)
+                self._save_settings()
             except Exception as e:
                 print("settings save:", e)
+        if learn and d["why"] == "done":
+            self._learn_out(d)
+        dur = (d["tc"] - d["t0"]) / 1000.0
         if ml >= MIN_POUR_ML:
-            self._log_pour([epoch(), int(round(ml)), round((d["tc"] - d["t0"]) / 1000.0, 1),
+            self._log_pour([epoch(), int(round(ml)), round(dur, 1),
                             round(d["f0"] * 100, 1), round(d["f_end"] * 100, 1)])
+<<<<<<< Updated upstream
         if d.get("auto"):
             self._disp_end()        # API pour started with auto=1: nobody to confirm "tap is closed"
 
@@ -971,6 +1248,64 @@ class Tank:
         d["st"] = "run"
         self.in_meas = None
         valve_set(True)
+=======
+        rep = {"kind": "auto", "why": d["why"], "target": d["target"], "ml": int(round(ml)),
+               "dur": round(dur, 1), "avg": round(ml / (dur + lag0), 1) if dur > 0.5 else None,
+               "f0": round(d["f0"] * 100, 1), "f_end": round(d["f_end"] * 100, 1)}
+        if d["why"] == "done":
+            e0 = d.get("eta0")
+            p50 = d.get("p50")
+            rep["e0"] = None if e0 is None else round(e0, 1)
+            rep["e50"] = None if (p50 is None or p50[1] is None) else round(p50[0] + p50[1], 1)
+        d["rep"] = self._report(rep)
+
+    def _learn_out(self, d):
+        """Fold this pour's drain rate (per fullness bin) into the learned curve and save it."""
+        changed = False
+        for b in range(OUT_BINS):
+            tt = d["bt"][b]
+            if tt < 0.4:
+                continue
+            m = d["bs"][b] / tt
+            n = self.out_n[b]
+            if n >= 3 and (m < 0.5 * self.out_m[b] or m > 2.0 * self.out_m[b]):
+                continue                     # tap barely open (or something odd): don't poison the curve
+            k = n + 1 if n < 12 else 12      # running mean at first, then a ~12-pour memory
+            self.out_m[b] = m if n == 0 else self.out_m[b] + (m - self.out_m[b]) / k
+            self.out_n[b] = k
+            changed = True
+        if changed:
+            self._out_rebuild()
+            try:
+                save_json(DRAIN_FILE, {"m": [round(x, 2) for x in self.out_m], "n": self.out_n})
+            except Exception as e:
+                print("drain save:", e)
+
+    def _out_rebuild(self):
+        known = [i for i in range(OUT_BINS) if self.out_n[i] > 0]
+        if not known:
+            self.out_curve = None
+            return
+        c = [0.0] * OUT_BINS
+        for i in range(OUT_BINS):
+            if self.out_n[i] > 0:
+                c[i] = self.out_m[i]
+                continue
+            a = None
+            b = None
+            for k in known:
+                if k < i:
+                    a = k
+                elif k > i and b is None:
+                    b = k
+            if a is None:
+                c[i] = self.out_m[b]
+            elif b is None:
+                c[i] = self.out_m[a]
+            else:
+                c[i] = self.out_m[a] + (self.out_m[b] - self.out_m[a]) * (i - a) / (b - a)
+        self.out_curve = c
+>>>>>>> Stashed changes
 
     def disp_action(self, act, q):
         d = self.disp
@@ -996,6 +1331,7 @@ class Tank:
                 return {"ok": False, "msg": "Amount must be 1-%d ml." % DISP_MAX_ML}
             if ml > self.g + 20:
                 return {"ok": False, "msg": "Only %d ml in the tank." % max(0, int(self.g))}
+<<<<<<< Updated upstream
             if force:
                 if len(self.gbuf.v) < 3:
                     return {"ok": False, "msg": "Scale not ready."}
@@ -1007,11 +1343,20 @@ class Tank:
             valve_set(False)    # close the solenoid: nothing flows, even once the tap is opened
             self.disp = {"st": "confirm1", "target": ml, "tq": mono(), "ml": 0.0, "rate": 0.0}
             return {"ok": True, "msg": "Open the tap.", "mode": "touchscreen"}
+=======
+            valve_set(True)     # water stays on: the user opens the tap and the scale takes it from there
+            self.prev_t = None
+            self.draw_cnt = 0
+            self.disp = {"st": "armed", "target": ml, "tq": mono(), "ml": 0.0, "rate": 0.0,
+                         "bs": [0.0] * OUT_BINS, "bt": [0.0] * OUT_BINS, "settled": False, "why": ""}
+            return {"ok": True, "msg": "Start pouring."}
+>>>>>>> Stashed changes
         if d is None:
             return {"ok": False, "msg": "No dispense in progress."}
         st = d["st"]
-        if act == "cancel" and st == "confirm1":
+        if act == "cancel" and st == "armed":
             self._disp_end()
+<<<<<<< Updated upstream
             return {"ok": True, "msg": "Cancelled. Water is back on, so close the tap if you opened it."}
         if act == "confirm1" and st == "confirm1":
             t = mono()
@@ -1020,20 +1365,39 @@ class Tank:
                 return {"ok": False, "msg": "Scale not ready."}
             self._disp_begin_run(d, t)
             return {"ok": True, "msg": "Dispensing."}
+=======
+            return {"ok": True, "msg": "Cancelled."}
+>>>>>>> Stashed changes
         if act == "stop" and st == "run":
             self._disp_close(mono(), "stopped")
             return {"ok": True, "msg": "Stopped."}
-        if act == "confirm2" and st == "confirm2":
-            if not d["settled"]:
-                self._disp_settle(False)
-            self._disp_end()        # tap is closed: valve back to open, water restored
-            return {"ok": True, "msg": "Done."}
+        if act == "done" and st == "report":
+            self._disp_end()        # tap is over the sink and shut: valve back to open, water restored
+            return {"ok": True, "msg": "Water is back on."}
         return {"ok": False, "msg": "That action doesn't fit the current step."}
 
     def set_settings(self, q):
         if self.disp is not None:
             return {"ok": False, "msg": "Not while dispensing."}
         try:
+            if q.get("full") == "1":
+                if not self.cal or self.g is None or not self.sensor_ok:
+                    return {"ok": False, "msg": "Scale not ready."}
+                if self.pour is not None:
+                    return {"ok": False, "msg": "A pour is in progress."}
+                vals = self.gbuf.v[-10:]
+                g = sum(vals) / len(vals)
+                f = g / self.cal["cap"]
+                if f < 0.5 or f > SNAP_MAX_FRAC:
+                    return {"ok": False, "msg": "The reading is %d%%, too far from full to be drift. Recalibrate instead." % int(f * 100)}
+                self._snap_full(mono(), g, "manual")
+                return {"ok": True, "msg": "Tank set to 100%."}
+            if q.get("drain_reset") == "1":
+                self.out_m = [0.0] * OUT_BINS
+                self.out_n = [0] * OUT_BINS
+                self._out_rebuild()
+                remove(DRAIN_FILE)
+                return {"ok": True, "msg": "Drain curve cleared."}
             if "cap" in q:
                 if not self.cal:
                     return {"ok": False, "msg": "Calibrate first."}
@@ -1056,7 +1420,7 @@ class Tank:
                     if v < 0 or v > DISP_MAX_ML:
                         return {"ok": False, "msg": "Preset must be 0-%d ml." % DISP_MAX_ML}
                     self.settings["presets"][i] = v
-            save_json(SETTINGS_FILE, self.settings)
+            self._save_settings()
         except ValueError:
             return {"ok": False, "msg": "Bad value."}
         return {"ok": True, "msg": "Saved."}
@@ -1120,11 +1484,23 @@ class Tank:
         d = {"ep": epoch(), "up": t // 1000, "ok": self.sensor_ok, "sat": self.sat,
              "cal": cal is not None, "step": step, "ip": self.ip, "raw": self.med,
              "presets": self.settings["presets"], "maxml": DISP_MAX_ML,
+<<<<<<< Updated upstream
              "lag": self.settings["lag"], "learn": self.settings["learn"]}
+=======
+             "ev": self.ev, "rep": self.last_rep, "drain": sum(1 for n in self.out_n if n)}
+>>>>>>> Stashed changes
         dp = self.disp
         if dp is not None:
-            d["disp"] = {"st": dp["st"], "target": dp["target"], "ml": int(round(dp["ml"])),
-                         "why": dp.get("why", ""), "set": dp.get("settled", False)}
+            st = dp["st"]
+            dd = {"st": st, "target": dp["target"], "ml": int(round(dp["ml"])), "why": dp.get("why", "")}
+            if st == "run":
+                dd["rate"] = round(dp["rate"], 1)
+                dd["el"] = round((t - dp["t0"]) / 1000.0, 1)
+                e = self._disp_eta(dp, self.g if self.g is not None else dp["w0"], self._live(dp, t))
+                dd["eta"] = None if e is None else round(e, 1)
+            elif st == "report":
+                dd["rep"] = dp.get("rep")
+            d["disp"] = dd
         if step in ("full", "drain") or not cal:
             d["stab"] = self.stability()
         if step in ("close", "drain", "grams", "open", "refill"):
@@ -1190,11 +1566,20 @@ async def sensor_task():
 async def tick_task():
     wdt = WDT(timeout=8000) if USE_WDT else None
     n = 0
+    errs = 0
     while True:
         try:
             tank.tick()
+            errs = 0
         except Exception as e:
             print("tick:", e)
+            errs += 1
+            if errs >= 3:       # a tick that keeps failing freezes the status: start the estimators over
+                errs = 0
+                try:
+                    tank.resync("tick errors")
+                except Exception as e2:
+                    print("resync:", e2)
         if wdt:
             wdt.feed()
         n += 1
@@ -1324,6 +1709,10 @@ async def handle(reader, writer):
             await send_file(writer, LOG_FILE, "text/csv")
         elif path == "/pours.csv":
             await send_file(writer, POURS_FILE, "text/csv")
+        elif path == "/drain.json":
+            await send_file(writer, DRAIN_FILE, "application/json")
+        elif path == "/snaps.csv":
+            await send_file(writer, SNAP_FILE, "text/csv")
         else:
             await send(writer, 404, "text/plain", "not found")
     except Exception as e:
