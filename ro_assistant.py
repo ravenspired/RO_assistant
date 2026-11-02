@@ -10,7 +10,7 @@ Files the Pico creates:
     cal_wip.json     calibration wizard progress (survives power cycles)
     refill_log.csv   fill rate vs fullness, logged during calibration
     pours.csv        history of every pour
-    settings.json    dispense presets and the learned valve lag
+    settings.json    dispense presets and the valve close lead (+ auto-tune flag)
     stats.json       hourly + daily water-use totals for the Stats page
 
 Wiring is the same as your test script: DT -> GP14, SCK -> GP15.
@@ -62,7 +62,12 @@ VALVE_PIN = 16
 VALVE_OPEN_LEVEL = 0       # GPIO level that lets water through. NO valve: coil off = open.
                            # Flip to 1 if your driver stage inverts. Idle = valve OPEN (coil off),
                            # so the sink works normally. It is only closed during a dispense.
-VALVE_LAG_S = 0.25         # starting guess for close lag; learned after every dispense
+VALVE_LAG_S = 0.25         # valve close lead, in seconds. The valve is told to close when
+                           #   dispensed_ml + current_flow_ml_s * VALVE_LAG_S >= target_ml
+                           # so fast flow closes earlier and slow flow closes later.
+                           # Starting value only: change it on the touchscreen (Settings) or via
+                           # /api/settings?lag=0.25. Auto-tuned after each dispense unless disabled.
+VALVE_LAG_MAX = 1.5        # largest lead (s) that can be set or learned
 DISP_MAX_ML = 9000
 DISP_STALL_MS = 15000      # valve open this long without ~5 ml of progress -> close
 DISP_STALL_ML = 5
@@ -348,7 +353,7 @@ class Tank:
         self.state = "idle"
         self.last_log_t = 0
         self.log_n = 0
-        self.settings = {"presets": [200, 1000, 3700, 2000, 0, 0, 0, 0], "lag": VALVE_LAG_S}
+        self.settings = {"presets": [200, 1000, 3700, 2000, 0, 0, 0, 0], "lag": VALVE_LAG_S, "learn": True}
         self.disp = None             # dispense job, see disp_action()
         self.stats_h = {}            # hour index -> [ml, pours]
         self.stats_d = {}            # day index  -> [ml, pours]
@@ -367,7 +372,9 @@ class Tank:
                 if isinstance(p, list) and len(p) == 8:
                     self.settings["presets"] = [int(clamp(int(x), 0, DISP_MAX_ML)) for x in p]
                 if "lag" in st:
-                    self.settings["lag"] = clamp(float(st["lag"]), 0.0, 1.5)
+                    self.settings["lag"] = clamp(float(st["lag"]), 0.0, VALVE_LAG_MAX)
+                if "learn" in st:
+                    self.settings["learn"] = bool(st["learn"])
             except Exception as e:
                 print("settings load:", e)
         self._stats_load()
@@ -941,9 +948,9 @@ class Tank:
         d = self.disp
         d["settled"] = True
         ml = d["ml"]
-        if learn and d["why"] == "done" and d["rate_close"] > 5.0:
+        if learn and self.settings.get("learn", True) and d["why"] == "done" and d["rate_close"] > 5.0:
             lag = self.settings["lag"] + 0.6 * (ml - d["target"]) / d["rate_close"]
-            self.settings["lag"] = round(clamp(lag, 0.0, 1.5), 3)
+            self.settings["lag"] = round(clamp(lag, 0.0, VALVE_LAG_MAX), 3)
             try:
                 save_json(SETTINGS_FILE, self.settings)
             except Exception as e:
@@ -951,11 +958,31 @@ class Tank:
         if ml >= MIN_POUR_ML:
             self._log_pour([epoch(), int(round(ml)), round((d["tc"] - d["t0"]) / 1000.0, 1),
                             round(d["f0"] * 100, 1), round(d["f_end"] * 100, 1)])
+        if d.get("auto"):
+            self._disp_end()        # API pour started with auto=1: nobody to confirm "tap is closed"
+
+    def _disp_begin_run(self, d, t):
+        """Baseline the scale and open the valve: the metered part of a dispense starts here."""
+        vals = self.gbuf.v[-3:]
+        w0 = sum(vals) / len(vals)
+        d.update({"w0": w0, "f0": w0 / self.cal["cap"], "f_end": w0 / self.cal["cap"],
+                  "in_int": 0.0, "ml": 0.0, "rate": 0.0, "prev": t, "t0": t,
+                  "pt": t, "pml": 0.0, "settled": False, "why": ""})
+        d["st"] = "run"
+        self.in_meas = None
+        valve_set(True)
 
     def disp_action(self, act, q):
         d = self.disp
         if act == "start":
-            if d is not None:
+            # mode=touchscreen (default): the touchscreen asks for "Open the tap" and the person confirms.
+            # mode=force: skip that prompt and start metering right now (the tap must already be open).
+            #   auto=1 (force only) also skips "Close the tap" and restores normal water once settled.
+            mode = q.get("mode", "touchscreen") or "touchscreen"
+            if mode not in ("touchscreen", "force"):
+                return {"ok": False, "msg": "mode must be touchscreen or force."}
+            force = mode == "force"
+            if d is not None and not (force and d["st"] == "confirm1"):
                 return {"ok": False, "msg": "A dispense is already in progress."}
             if not self.cal or self.g is None or not self.sensor_ok:
                 return {"ok": False, "msg": "Scale not ready."}
@@ -969,9 +996,17 @@ class Tank:
                 return {"ok": False, "msg": "Amount must be 1-%d ml." % DISP_MAX_ML}
             if ml > self.g + 20:
                 return {"ok": False, "msg": "Only %d ml in the tank." % max(0, int(self.g))}
+            if force:
+                if len(self.gbuf.v) < 3:
+                    return {"ok": False, "msg": "Scale not ready."}
+                # (replaces a touchscreen request that was still waiting for its confirmation)
+                self.disp = nd = {"st": "confirm1", "target": ml, "tq": mono(), "ml": 0.0, "rate": 0.0,
+                                  "force": True, "auto": q.get("auto") == "1"}
+                self._disp_begin_run(nd, mono())
+                return {"ok": True, "msg": "Dispensing.", "mode": "force"}
             valve_set(False)    # close the solenoid: nothing flows, even once the tap is opened
             self.disp = {"st": "confirm1", "target": ml, "tq": mono(), "ml": 0.0, "rate": 0.0}
-            return {"ok": True, "msg": "Open the tap."}
+            return {"ok": True, "msg": "Open the tap.", "mode": "touchscreen"}
         if d is None:
             return {"ok": False, "msg": "No dispense in progress."}
         st = d["st"]
@@ -983,14 +1018,7 @@ class Tank:
             if self.g is None or not self.sensor_ok or len(self.gbuf.v) < 3:
                 self._disp_end()
                 return {"ok": False, "msg": "Scale not ready."}
-            vals = self.gbuf.v[-3:]
-            w0 = sum(vals) / len(vals)
-            d.update({"w0": w0, "f0": w0 / self.cal["cap"], "f_end": w0 / self.cal["cap"],
-                      "in_int": 0.0, "ml": 0.0, "rate": 0.0, "prev": t, "t0": t,
-                      "pt": t, "pml": 0.0, "settled": False, "why": ""})
-            d["st"] = "run"
-            self.in_meas = None
-            valve_set(True)
+            self._disp_begin_run(d, t)
             return {"ok": True, "msg": "Dispensing."}
         if act == "stop" and st == "run":
             self._disp_close(mono(), "stopped")
@@ -1014,6 +1042,13 @@ class Tank:
                     return {"ok": False, "msg": "Total volume must be 1000-20000 ml."}
                 self.cal["cap"] = v
                 save_json(CALIB_FILE, self.cal)
+            if "lag" in q:
+                v = float(q["lag"])
+                if v < 0 or v > VALVE_LAG_MAX:
+                    return {"ok": False, "msg": "Close lead must be 0-%.1f s." % VALVE_LAG_MAX}
+                self.settings["lag"] = round(v, 3)
+            if "learn" in q:
+                self.settings["learn"] = q["learn"] == "1"
             for i in range(8):
                 k = "p%d" % i
                 if k in q:
@@ -1026,6 +1061,57 @@ class Tank:
             return {"ok": False, "msg": "Bad value."}
         return {"ok": True, "msg": "Saved."}
 
+    # ---------- telemetry for outside programs (GET /api/telemetry) ----------
+    def telemetry(self):
+        t = mono()
+        cal = self.cal
+        p = self.pour
+        dp = self.disp
+        lag = self.settings["lag"]
+        d = {"epoch": epoch(), "uptime_s": t // 1000, "ip": self.ip,
+             "sensor_ok": self.sensor_ok, "saturated": self.sat, "calibrated": cal is not None,
+             "raw": self.med,
+             "valve": "open" if valve.value() == VALVE_OPEN_LEVEL else "closed",
+             "valve_lead_s": lag, "valve_lead_autotune": self.settings["learn"],
+             "busy": p is not None or dp is not None,
+             "ready": bool(cal) and self.g is not None and self.sensor_ok and p is None and dp is None}
+        if cal and self.g is not None:
+            cap = cal["cap"]
+            ml = max(0.0, self.g)
+            in_rate, src = self.in_display(ml / cap)
+            if p is not None or dp is not None:
+                out = self.out_ema
+                net = self.slope2
+            elif self.in_meas is not None:
+                out = max(0.0, -self.in_meas)
+                net = self.in_meas
+            else:
+                out = 0.0
+                net = self.slope2
+            d.update({"state": self.state if self.sensor_ok else "fault",
+                      "grams": round(self.g, 1), "ml": int(round(ml)), "capacity_ml": int(round(cap)),
+                      "percent": round(ml / cap * 100, 1),
+                      "inflow_ml_s": round(in_rate, 2), "outflow_ml_s": round(out, 2),
+                      "net_ml_s": round(net, 2),
+                      "refill_eta_s": None if self.eta_s is None else int(self.eta_s)})
+        else:
+            d["state"] = ("idle" if cal else "uncal") if self.sensor_ok else "fault"
+        d["pour"] = None
+        if p is not None:
+            d["pour"] = {"ml": int(round(p["snap"])), "elapsed_s": round((t - p["t0"]) / 1000.0, 1),
+                         "peak_ml_s": round(p["peak"], 1)}
+        d["dispense"] = None
+        if dp is not None:
+            d["dispense"] = {"state": dp["st"], "target_ml": dp["target"], "ml": int(round(dp["ml"])),
+                             "rate_ml_s": round(dp["rate"], 2),
+                             "lead_ml": round(dp["rate"] * lag, 1),   # how early the valve closes at this flow
+                             "forced": bool(dp.get("force")), "why": dp.get("why", ""),
+                             "settled": dp.get("settled", False)}
+        lp = self.last_pour
+        d["last_pour"] = None if lp is None else {
+            "epoch": lp[0], "ml": lp[1], "duration_s": lp[2], "start_pct": lp[3], "end_pct": lp[4]}
+        return d
+
     # ---------- state for the dashboard ----------
     def snapshot(self):
         t = mono()
@@ -1033,7 +1119,8 @@ class Tank:
         step = self.wip.get("step", "idle")
         d = {"ep": epoch(), "up": t // 1000, "ok": self.sensor_ok, "sat": self.sat,
              "cal": cal is not None, "step": step, "ip": self.ip, "raw": self.med,
-             "presets": self.settings["presets"], "maxml": DISP_MAX_ML}
+             "presets": self.settings["presets"], "maxml": DISP_MAX_ML,
+             "lag": self.settings["lag"], "learn": self.settings["learn"]}
         dp = self.disp
         if dp is not None:
             d["disp"] = {"st": dp["st"], "target": dp["target"], "ml": int(round(dp["ml"])),
@@ -1201,6 +1288,8 @@ async def handle(reader, writer):
         path, _, qs = target.partition("?")
         if path == "/api/state":
             await send(writer, 200, "application/json", json.dumps(tank.snapshot()))
+        elif path == "/api/telemetry":
+            await send(writer, 200, "application/json", json.dumps(tank.telemetry()))
         elif path == "/api/stats":
             await send(writer, 200, "application/json", json.dumps(tank.stats_snapshot()))
         elif path == "/api/cal":
@@ -1210,6 +1299,15 @@ async def handle(reader, writer):
                 q = parse_qs(qs)
                 res = tank.cal_action(q.get("action", ""), q)
                 await send(writer, 200, "application/json", json.dumps(res))
+        elif path == "/api/pour":
+            # POST /api/pour?ml=500                    -> touchscreen asks "Open the tap", person confirms
+            # POST /api/pour?ml=500&mode=force         -> starts metering immediately
+            # POST /api/pour?ml=500&mode=force&auto=1  -> same, and restores normal water when done
+            # Stop / finish / cancel a pour with /api/dispense?action=stop|confirm2|cancel
+            if method != "POST":
+                await send(writer, 405, "text/plain", "POST only")
+            else:
+                await send(writer, 200, "application/json", json.dumps(tank.disp_action("start", parse_qs(qs))))
         elif path in ("/api/dispense", "/api/settings"):
             if method != "POST":
                 await send(writer, 405, "text/plain", "POST only")

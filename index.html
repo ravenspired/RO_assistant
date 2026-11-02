@@ -298,6 +298,12 @@ a{color:var(--w2)}
         <div class="sgrid" id="sgrid"></div>
       </div>
       <div class="sec">
+        <h2>Dispense valve</h2>
+        <div class="fld"><span>Close lead <span class="muted" style="font-size:.9rem">(valve closes this long before the target at the current flow rate)</span></span><button class="val" id="setLag" onclick="editLag()">–</button></div>
+        <div class="fld" style="margin-top:.8rem"><span>Auto-tune lead after each dispense</span>
+          <div class="seg" role="group" aria-label="Auto-tune"><button id="lrnOn" onclick="save('learn=1')">On</button><button id="lrnOff" onclick="save('learn=0')">Off</button></div></div>
+      </div>
+      <div class="sec">
         <h2>Calibration</h2>
         <div id="wiz"></div>
       </div>
@@ -423,6 +429,10 @@ function editCap(){
   if(!S||!S.cal)return toast('Calibrate first',false);
   openKeypad({title:'Total tank volume',max:20000,min:1000,init:S.cap,onOk:n=>save('cap='+n)});
 }
+function editLag(){
+  if(!S||S.lag===undefined)return;
+  openKeypad({title:'Valve close lead',unit:'ms',max:1500,min:0,init:Math.round(S.lag*1000),onOk:n=>save('lag='+(n/1000))});
+}
 function renderPresets(){
   const P=S.presets||[], ready=S.cal&&S.ml!==undefined&&S.ok&&!S.disp&&!S.pour;
   for(let i=0;i<8;i++){
@@ -433,6 +443,8 @@ function renderPresets(){
   }
   $('customBtn').disabled=!ready;
   $('setCap').textContent=S.cal&&S.cap?fmt(S.cap)+' ml':'–';
+  $('setLag').textContent=S.lag!==undefined?Math.round(S.lag*1000)+' ms':'–';
+  $('lrnOn').classList.toggle('on',S.learn!==false); $('lrnOff').classList.toggle('on',S.learn===false);
 }
 
 /* ---------- rendering ---------- */
